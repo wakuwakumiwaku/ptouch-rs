@@ -324,17 +324,23 @@ impl<T: Transport> PrinterSession<T> {
         };
 
         let job = protocol::build_print_job(lines, self.profile.flags, &opts);
-        self.send_job(job)?;
-
-        if self
-            .profile
-            .flags
-            .contains(DeviceFlags::WAIT_FOR_RECEIVE_READY)
-        {
-            self.wait_until_ready()
-        } else {
-            self.receive_print_completion()
+        let result = self.send_job(job).and_then(|_| {
+            if self
+                .profile
+                .flags
+                .contains(DeviceFlags::WAIT_FOR_RECEIVE_READY)
+            {
+                self.wait_until_ready()
+            } else {
+                self.receive_print_completion()
+            }
+        });
+        if result.is_err() {
+            // A failed transfer may leave a partial command in the printer.
+            // Require an explicit reset; never replay the job automatically.
+            self.initialized = false;
         }
+        result
     }
 
     /// Feed tape forward and cut.
@@ -360,15 +366,21 @@ impl<T: Transport> PrinterSession<T> {
         };
 
         let job = protocol::build_print_job(&lines, self.profile.flags, &opts);
-        self.send_job(job)?;
-
-        if self
-            .profile
-            .flags
-            .contains(DeviceFlags::WAIT_FOR_RECEIVE_READY)
-        {
-            self.wait_until_ready()?;
+        let result = self.send_job(job).and_then(|_| {
+            if self
+                .profile
+                .flags
+                .contains(DeviceFlags::WAIT_FOR_RECEIVE_READY)
+            {
+                self.wait_until_ready()
+            } else {
+                Ok(())
+            }
+        });
+        if result.is_err() {
+            self.initialized = false;
         }
+        result?;
 
         info!("Feed and cut");
         Ok(())
@@ -399,29 +411,18 @@ impl<T: Transport> PrinterSession<T> {
         }
     }
 
-    /// Preserve the original best-effort completion read for models whose
-    /// readiness lifecycle has not been documented or tested.
+    /// Read one status for models whose readiness lifecycle is undocumented.
+    /// Silence remains best-effort, but a reply must be complete and valid.
     fn receive_print_completion(&mut self) -> Result<()> {
-        let mut response = [0u8; STATUS_PACKET_SIZE];
-        match self.receive(&mut response) {
-            Ok(n) if n >= STATUS_PACKET_SIZE => {
-                if let Some(status) = PrinterStatus::from_bytes(&response) {
-                    if status.has_error() {
-                        return Err(PtouchError::StatusError(status.error_description()));
-                    }
-                    debug!("Print completed: status_type={}", status.status_type_name());
-                    self.status = Some(status);
-                }
-            }
-            Ok(n) => {
-                debug!("Short status response after print: {} bytes", n);
-            }
-            Err(PtouchError::Timeout) => {
-                debug!("Timeout waiting for print completion status");
-            }
-            Err(error) => return Err(error),
+        let transport = &self.transport;
+        if let Some(status) = read_usb_completion(
+            &mut self.status_frames,
+            |buf, timeout| transport.receive(buf, timeout),
+            TRANSFER_TIMEOUT,
+        )? {
+            debug!("Print completed: status_type={}", status.status_type_name());
+            self.status = Some(status);
         }
-
         Ok(())
     }
 
@@ -456,6 +457,54 @@ impl<T: Transport> PrinterSession<T> {
         info!("Device closed: {}", self.profile.name);
         Ok(())
     }
+}
+
+/// Accumulate one USB status frame within a fixed total deadline. Do not
+/// require a receiving-phase notification on models such as the PT-D600.
+fn read_usb_completion<F>(
+    frames: &mut StatusFrameBuffer,
+    mut receive: F,
+    timeout: Duration,
+) -> Result<Option<PrinterStatus>>
+where
+    F: FnMut(&mut [u8], Duration) -> Result<usize>,
+{
+    let start = Instant::now();
+    loop {
+        if let Some(packet) = frames.pop() {
+            let status = parse_status_packet(&packet, "Invalid status header after print")?;
+            // Reuse the error checks, not the receiving-phase requirement.
+            print_status_is_ready(&status)?;
+            return Ok(Some(status));
+        }
+        let Some(remaining) = timeout
+            .checked_sub(start.elapsed())
+            .filter(|d| !d.is_zero())
+        else {
+            break;
+        };
+        let mut bytes = [0u8; STATUS_PACKET_SIZE];
+        match receive(&mut bytes, remaining.max(PRINT_STATUS_MIN_POLL_TIMEOUT)) {
+            Ok(n) if n > bytes.len() => {
+                return Err(PtouchError::StatusError(
+                    "Transport returned more bytes than the receive buffer".into(),
+                ));
+            }
+            Ok(0) => std::thread::sleep(remaining.min(ZERO_LENGTH_TRANSFER_DELAY)),
+            Ok(n) => frames.push(&bytes[..n]),
+            Err(PtouchError::Timeout) => break,
+            Err(error) => return Err(error),
+        }
+    }
+    if frames.len() != 0 {
+        return Err(PtouchError::StatusError(format!(
+            "Incomplete status packet after print: {} bytes (expected {})",
+            frames.len(),
+            STATUS_PACKET_SIZE
+        )));
+    }
+    debug!("No status received after print; completion is unconfirmed");
+    Ok(None)
 }
 
 fn read_p300bt_status<F>(
@@ -905,6 +954,299 @@ mod tests {
             ),
             Err(PtouchError::Timeout)
         ));
+    }
+
+    fn d600_session() -> PrinterSession<ScriptedTransport> {
+        let device = crate::device::find_device(crate::device::BROTHER_VENDOR_ID, 0x2074)
+            .expect("PT-D600 must remain in the supported device table");
+        PrinterSession::new(ScriptedTransport::new(), device.into())
+    }
+
+    #[test]
+    fn d600_completion_accumulates_every_fragment_boundary() {
+        for split in 1..STATUS_PACKET_SIZE {
+            for error in [0, 0x04] {
+                let mut packet = status_packet(0x01, 0x00);
+                packet[8] = error;
+                let mut session = d600_session();
+                session
+                    .transport
+                    .reads
+                    .borrow_mut()
+                    .extend([packet[..split].to_vec(), packet[split..].to_vec()]);
+
+                let result = session.receive_print_completion();
+                if error == 0 {
+                    result.unwrap();
+                    assert_eq!(session.status().unwrap().status_type, 0x01);
+                } else {
+                    assert!(
+                        matches!(result, Err(PtouchError::StatusError(ref message)) if message == "Cutter jam"),
+                        "lost error with {split} bytes in the first transfer: {result:?}"
+                    );
+                }
+                assert!(session.transport.reads.borrow().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn d600_completion_rejects_unspecified_error() {
+        let mut session = d600_session();
+        session
+            .transport
+            .reads
+            .borrow_mut()
+            .push_back(status_packet(0x02, 0).to_vec());
+        assert!(matches!(
+            session.receive_print_completion(),
+            Err(PtouchError::StatusError(message)) if message == "Printer reported an unspecified error"
+        ));
+    }
+
+    #[test]
+    fn d600_completion_rejects_power_off() {
+        let mut session = d600_session();
+        session
+            .transport
+            .reads
+            .borrow_mut()
+            .push_back(status_packet(0x04, 0).to_vec());
+        assert!(matches!(
+            session.receive_print_completion(),
+            Err(PtouchError::StatusError(message)) if message == "Printer turned off"
+        ));
+    }
+
+    #[test]
+    fn d600_completion_rejects_invalid_headers() {
+        let mut session = d600_session();
+        session
+            .transport
+            .reads
+            .borrow_mut()
+            .push_back(vec![0; STATUS_PACKET_SIZE]);
+        assert!(matches!(
+            session.receive_print_completion(),
+            Err(PtouchError::StatusError(message)) if message.contains("Invalid status header")
+        ));
+    }
+
+    #[test]
+    fn d600_completion_does_not_treat_partial_status_as_silence() {
+        let mut session = d600_session();
+        session
+            .transport
+            .reads
+            .borrow_mut()
+            .push_back(status_packet(0x01, 0)[..11].to_vec());
+        assert!(matches!(
+            session.receive_print_completion(),
+            Err(PtouchError::StatusError(message)) if message.contains("11 bytes")
+        ));
+    }
+
+    #[test]
+    fn d600_completion_keeps_no_response_compatibility() {
+        let mut session = d600_session();
+        session.receive_print_completion().unwrap();
+        assert!(session.status().is_none());
+    }
+
+    #[test]
+    fn d600_completion_does_not_require_a_receiving_phase() {
+        let mut session = d600_session();
+        session
+            .transport
+            .reads
+            .borrow_mut()
+            .push_back(status_packet(0x01, 0x01).to_vec());
+        session.receive_print_completion().unwrap();
+        assert_eq!(session.status().unwrap().status_type, 0x01);
+    }
+
+    #[test]
+    fn usb_completion_honors_deadlines_without_zero_timeouts() {
+        let mut frames = StatusFrameBuffer::new();
+        assert!(
+            read_usb_completion(
+                &mut frames,
+                |_, _| panic!("deadline expired"),
+                Duration::ZERO
+            )
+            .unwrap()
+            .is_none()
+        );
+        frames.push(&[0x80]);
+        assert!(matches!(
+            read_usb_completion(
+                &mut frames,
+                |_, _| panic!("deadline expired"),
+                Duration::ZERO
+            ),
+            Err(PtouchError::StatusError(_))
+        ));
+
+        let packet = status_packet(1, 0);
+        let status = read_usb_completion(
+            &mut StatusFrameBuffer::new(),
+            |buf, timeout| {
+                assert!(timeout >= PRINT_STATUS_MIN_POLL_TIMEOUT);
+                buf.copy_from_slice(&packet);
+                Ok(packet.len())
+            },
+            TRANSFER_TIMEOUT,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(status.status_type, 1);
+    }
+
+    #[test]
+    fn usb_completion_ignores_empty_transfers_and_keeps_the_next_prefix() {
+        let done = status_packet(1, 0);
+        let mut error = status_packet(2, 0);
+        error[8] = 4;
+        let mut transfers = VecDeque::from([
+            Vec::new(),
+            done[..7].to_vec(),
+            [done[7..].as_ref(), &error[..7]].concat(),
+            error[7..].to_vec(),
+        ]);
+        let mut receive = |buf: &mut [u8], _| {
+            let bytes = transfers.pop_front().ok_or(PtouchError::Timeout)?;
+            buf[..bytes.len()].copy_from_slice(&bytes);
+            Ok(bytes.len())
+        };
+        let mut frames = StatusFrameBuffer::new();
+        assert_eq!(
+            read_usb_completion(&mut frames, &mut receive, TRANSFER_TIMEOUT)
+                .unwrap()
+                .unwrap()
+                .status_type,
+            1
+        );
+        assert_eq!(frames.len(), 7);
+        assert!(matches!(
+            read_usb_completion(&mut frames, &mut receive, TRANSFER_TIMEOUT),
+            Err(PtouchError::StatusError(message)) if message == "Cutter jam"
+        ));
+        assert!(transfers.is_empty());
+    }
+
+    #[test]
+    fn usb_completion_rejects_oversized_reads_and_propagates_disconnects() {
+        assert!(matches!(
+            read_usb_completion(
+                &mut StatusFrameBuffer::new(),
+                |buf, _| Ok(buf.len() + 1),
+                TRANSFER_TIMEOUT
+            ),
+            Err(PtouchError::StatusError(_))
+        ));
+        assert!(matches!(
+            read_usb_completion(
+                &mut StatusFrameBuffer::new(),
+                |_, _| Err(PtouchError::UsbError(rusb::Error::NoDevice)),
+                TRANSFER_TIMEOUT,
+            ),
+            Err(PtouchError::UsbError(rusb::Error::NoDevice))
+        ));
+    }
+
+    #[test]
+    fn d600_failed_completion_requires_reinitialization() {
+        let mut session = d600_session();
+        session.init().unwrap();
+        session
+            .transport
+            .reads
+            .borrow_mut()
+            .push_back(status_packet(4, 0).to_vec());
+        assert!(
+            session
+                .print_raster(
+                    &[vec![0; 16]],
+                    false,
+                    false,
+                    protocol::PrintQuality::Standard
+                )
+                .is_err()
+        );
+        assert!(!session.is_initialized());
+        let writes = session.transport.writes.borrow().len();
+        assert!(matches!(
+            session.feed_and_cut(),
+            Err(PtouchError::NotInitialized)
+        ));
+        assert_eq!(session.transport.writes.borrow().len(), writes);
+        session.init().unwrap();
+        assert!(session.is_initialized());
+    }
+
+    fn check_d600_failed_transfers(feed_and_cut: bool) {
+        let lines = [vec![if feed_and_cut { 0 } else { 0x80 }; 16]];
+        let mut session = d600_session();
+        let job = protocol::build_print_job(
+            &lines,
+            session.flags(),
+            &protocol::JobOptions {
+                media_width: 12,
+                ..Default::default()
+            },
+        );
+        for failed_write in 1..=job.len() {
+            session.init().unwrap();
+            session.transport.writes.borrow_mut().clear();
+            session.transport.fail_on_write.set(Some(failed_write));
+            let result = if feed_and_cut {
+                session.feed_and_cut()
+            } else {
+                session.print_raster(&lines, false, false, protocol::PrintQuality::Standard)
+            };
+            assert!(matches!(result, Err(PtouchError::SendFailed(_))));
+            assert_eq!(*session.transport.writes.borrow(), job[..failed_write]);
+            assert!(
+                !session.is_initialized(),
+                "failure on transfer {failed_write}"
+            );
+
+            session.transport.fail_on_write.set(None);
+            assert!(matches!(
+                session.print_raster(&lines, false, false, protocol::PrintQuality::Standard),
+                Err(PtouchError::NotInitialized)
+            ));
+            assert!(matches!(
+                session.feed_and_cut(),
+                Err(PtouchError::NotInitialized)
+            ));
+            assert_eq!(session.transport.writes.borrow().len(), failed_write);
+
+            // Only an explicit successful reset makes the connection reusable.
+            session.transport.writes.borrow_mut().clear();
+            session.init().unwrap();
+            assert!(session.is_initialized());
+            assert_eq!(session.transport.writes.borrow()[0], protocol::cmd_init());
+            session.transport.writes.borrow_mut().clear();
+            if feed_and_cut {
+                session.feed_and_cut().unwrap();
+            } else {
+                session
+                    .print_raster(&lines, false, false, protocol::PrintQuality::Standard)
+                    .unwrap();
+            }
+            assert_eq!(*session.transport.writes.borrow(), job);
+        }
+    }
+
+    #[test]
+    fn d600_failed_print_transfers_require_reinitialization() {
+        check_d600_failed_transfers(false);
+    }
+
+    #[test]
+    fn d600_failed_feed_transfers_require_reinitialization() {
+        check_d600_failed_transfers(true);
     }
 
     #[test]
