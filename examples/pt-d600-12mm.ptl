@@ -1,0 +1,19 @@
+version = 1
+tape_width_mm = 12
+dpi = 180
+font_name = "DejaVu Sans"
+font_margin = 2
+
+[[elements]]
+type = "padding"
+pixels = 12
+
+[[elements]]
+type = "text"
+content = "USB-C cables"
+align = "center"
+rotation = 0.0
+
+[[elements]]
+type = "padding"
+pixels = 12
