@@ -10,9 +10,10 @@
 //! Pixels are packed row-major, 1 bit per pixel, MSB first.
 //! A set bit (1) means black; a clear bit (0) means white.
 
+use std::io::Cursor;
 use std::path::Path;
 
-use image::{GrayImage, RgbaImage};
+use image::{DynamicImage, GrayImage, ImageFormat, RgbaImage};
 
 use crate::Result;
 
@@ -161,11 +162,19 @@ impl LabelBitmap {
     /// Save the bitmap to a file.
     ///
     /// The output format is determined by the file extension (png, jpg,
-    /// bmp, gif, tiff, webp, etc.). Falls back to PNG for unknown
-    /// extensions.
+    /// jpeg, bmp, gif, tiff, webp, etc.). Falls back to PNG for unknown
+    /// or missing extensions. JPEG is lossy.
+    ///
+    /// Encoding completes before the destination is opened, so encoder errors
+    /// leave existing files untouched. Filesystem writes are not atomic.
     pub fn save(&self, path: &Path) -> Result<()> {
-        let rgba = self.to_rgba_image();
-        rgba.save(path)?;
+        let format = ImageFormat::from_path(path).unwrap_or(ImageFormat::Png);
+        // DynamicImage converts RGBA to a color type supported by the encoder,
+        // e.g. RGB for JPEG, while keeping alpha for formats that support it.
+        let image = DynamicImage::ImageRgba8(self.to_rgba_image());
+        let mut encoded = Cursor::new(Vec::new());
+        image.write_to(&mut encoded, format)?;
+        std::fs::write(path, encoded.into_inner())?;
         Ok(())
     }
 
@@ -455,6 +464,161 @@ impl LabelBitmap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod export_tests {
+        use super::*;
+        use std::fs;
+        use std::io::ErrorKind;
+        use std::path::PathBuf;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct ExportDir(PathBuf);
+
+        impl ExportDir {
+            fn new() -> Self {
+                static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+                loop {
+                    let path = std::env::temp_dir().join(format!(
+                        "ptouch-render-export-{}-{}",
+                        std::process::id(),
+                        NEXT_ID.fetch_add(1, Ordering::Relaxed)
+                    ));
+                    match fs::create_dir(&path) {
+                        Ok(()) => return Self(path),
+                        Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
+                        Err(err) => panic!("cannot create export test directory: {err}"),
+                    }
+                }
+            }
+        }
+
+        impl Drop for ExportDir {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        fn sample_bitmap() -> LabelBitmap {
+            // Odd, unequal dimensions exercise row padding and orientation.
+            let mut bitmap = LabelBitmap::new(19, 11);
+            for y in 0..bitmap.height() {
+                for x in 0..bitmap.width() {
+                    bitmap.set_pixel(x, y, x == y || x == 18 || (x < 7 && y > 5));
+                }
+            }
+            bitmap
+        }
+
+        fn assert_export(name: &str, format: image::ImageFormat) {
+            let dir = ExportDir::new();
+            let path = dir.0.join(name);
+            let bitmap = sample_bitmap();
+            bitmap
+                .save(&path)
+                .unwrap_or_else(|err| panic!("{name}: {err}"));
+            let bytes = fs::read(&path).unwrap();
+            assert_eq!(image::guess_format(&bytes).unwrap(), format, "{name}");
+            let decoded = image::load_from_memory(&bytes).unwrap().to_rgba8();
+            assert_eq!(
+                decoded.dimensions(),
+                (bitmap.width(), bitmap.height()),
+                "{name}"
+            );
+            for (x, y, pixel) in decoded.enumerate_pixels() {
+                if format == image::ImageFormat::Jpeg {
+                    // JPEG is lossy: preserve the black/white pattern, not exact samples.
+                    for channel in &pixel.0[..3] {
+                        assert_eq!(*channel < 128, bitmap.get_pixel(x, y), "{name}: ({x}, {y})");
+                    }
+                    assert_eq!(pixel.0[3], 255, "{name}: ({x}, {y})");
+                } else {
+                    let value = if bitmap.get_pixel(x, y) { 0 } else { 255 };
+                    assert_eq!(pixel.0, [value, value, value, 255], "{name}: ({x}, {y})");
+                }
+            }
+        }
+
+        #[test]
+        fn lossless_formats_preserve_pixels_and_dimensions() {
+            for (name, format) in [
+                ("label.png", image::ImageFormat::Png),
+                ("label.bmp", image::ImageFormat::Bmp),
+                ("label.gif", image::ImageFormat::Gif),
+                ("label.tiff", image::ImageFormat::Tiff),
+                ("label.tif", image::ImageFormat::Tiff),
+                ("label.webp", image::ImageFormat::WebP),
+            ] {
+                assert_export(name, format);
+            }
+        }
+
+        #[test]
+        fn jpeg_extensions_preserve_pattern_and_dimensions() {
+            for name in ["label.jpg", "label.jpeg"] {
+                assert_export(name, image::ImageFormat::Jpeg);
+            }
+        }
+
+        #[test]
+        fn extensions_are_case_insensitive() {
+            assert_export("label.PNG", image::ImageFormat::Png);
+            assert_export("label.JpEg", image::ImageFormat::Jpeg);
+        }
+
+        #[test]
+        fn unknown_extension_falls_back_to_png() {
+            assert_export("label.unknown", image::ImageFormat::Png);
+        }
+
+        #[test]
+        fn missing_extension_falls_back_to_png() {
+            assert_export("label", image::ImageFormat::Png);
+        }
+
+        #[test]
+        fn encoder_failure_preserves_existing_file() {
+            let dir = ExportDir::new();
+            let path = dir.0.join("existing.jpg");
+            let original = b"original file contents must survive an encoder failure";
+            fs::write(&path, original).unwrap();
+            // JPEG dimensions are limited to u16, independently of color conversion.
+            let bitmap = LabelBitmap::new(u32::from(u16::MAX) + 1, 1);
+            assert!(matches!(
+                bitmap.save(&path),
+                Err(crate::RenderError::Image(_))
+            ));
+            assert_eq!(fs::read(&path).unwrap(), original);
+        }
+
+        #[test]
+        fn encoder_failure_does_not_create_destination() {
+            let dir = ExportDir::new();
+            let path = dir.0.join("new.jpg");
+            let bitmap = LabelBitmap::new(u32::from(u16::MAX) + 1, 1);
+            assert!(matches!(
+                bitmap.save(&path),
+                Err(crate::RenderError::Image(_))
+            ));
+            assert!(!path.exists());
+        }
+
+        #[test]
+        fn filesystem_errors_are_preserved() {
+            let dir = ExportDir::new();
+            let directory_path = dir.0.join("directory.png");
+            fs::create_dir(&directory_path).unwrap();
+            for path in [dir.0.join("missing-parent/label.png"), directory_path] {
+                let expected = fs::File::create(&path).unwrap_err();
+                match sample_bitmap().save(&path).unwrap_err() {
+                    crate::RenderError::Io(actual) => {
+                        assert_eq!(actual.kind(), expected.kind());
+                        assert_eq!(actual.raw_os_error(), expected.raw_os_error());
+                    }
+                    other => panic!("expected a native I/O error, got {other:?}"),
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_new_bitmap_is_white() {
