@@ -285,7 +285,7 @@ static DEVICE_TABLE: &[DeviceInfo] = &[
         name: "PT-D600",
         max_px: 128,
         dpi: 180,
-        flags: DeviceFlags::RASTER_PACKBITS,
+        flags: DeviceFlags::RASTER_PACKBITS.union(DeviceFlags::HAS_PRECUT),
     },
     DeviceInfo {
         vid: 0x04f9,
