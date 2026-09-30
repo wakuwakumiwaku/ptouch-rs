@@ -93,12 +93,22 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
 
             let (raster_lines, chain_print, precut) = match state.cut_mode {
                 crate::state::CutMarginMode::CenteredFull => {
-                    // Left side physically has the hardware lead (~24.5mm) already ahead of the print head.
-                    // The final cut command (0x1A) automatically feeds the tape ~24.5mm past the print head
-                    // to the cutter blade.
-                    // Thus, sending raw lines directly produces identical ~24.5mm blank space
-                    // on both left and right sides — perfectly centered with 0 scrap, matching standalone printer typing.
-                    (raw_lines, false, false)
+                    // Left side physically has the hardware lead (~24.5mm) + 2.5mm prelabel safety margin
+                    // to prevent the first letters from getting cut off (total left margin: 27.0mm).
+                    // Trailing margin matching the exact same 27.0mm is fed after the text,
+                    // so the final cut produces an identically centered label with matching white blank space.
+                    let prelabel_mm: f32 = 2.5;
+                    let lead_mm: f32 = 24.5;
+                    let total_margin_mm: f32 = lead_mm + prelabel_mm; // 27.0 mm
+
+                    let leading_lines = (prelabel_mm * px_per_mm).round() as usize;
+                    let trailing_lines = (total_margin_mm * px_per_mm).round() as usize;
+
+                    let mut lines = Vec::with_capacity(leading_lines + raw_lines.len() + trailing_lines);
+                    lines.extend(std::iter::repeat(blank_line.clone()).take(leading_lines));
+                    lines.extend(raw_lines);
+                    lines.extend(std::iter::repeat(blank_line).take(trailing_lines));
+                    (lines, false, false)
                 }
                 crate::state::CutMarginMode::PretrimCut => {
                     // Pre-cut trims the 24.5 mm scrap first.
@@ -123,7 +133,7 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
             // Track cumulative tape consumption
             let total_job_mm = match state.cut_mode {
                 crate::state::CutMarginMode::CenteredFull => {
-                    (24.5 + (raster_lines.len() as f32 / px_per_mm) + 24.5) * copies as f32
+                    (24.5 + (raster_lines.len() as f32 / px_per_mm)) * copies as f32
                 }
                 _ => (raster_lines.len() as f32 / px_per_mm) * copies as f32,
             };
@@ -260,7 +270,7 @@ fn do_open_layout(state: &mut AppState) {
     }
 }
 
-fn apply_layout(state: &mut AppState, document: LabelDocument) {
+pub(crate) fn apply_layout(state: &mut AppState, document: LabelDocument) {
     if !state.printer_target.is_bluetooth() {
         state.tape_width_mm = document.tape_width_mm;
         state.update_tape_pixels();

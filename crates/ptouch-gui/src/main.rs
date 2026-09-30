@@ -44,6 +44,8 @@ fn main() -> eframe::Result<()> {
         viewport = viewport.with_icon(std::sync::Arc::new(icon));
     }
 
+    let layout_file = std::env::args().nth(1).filter(|a| !a.starts_with('-'));
+
     let options = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Glow,
@@ -52,6 +54,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "P-Touch Label Printer",
         options,
-        Box::new(|cc| Ok(Box::new(app::PtouchApp::new(cc)))),
+        Box::new(move |cc| Ok(Box::new(app::PtouchApp::with_layout_file(cc, layout_file)))),
     )
 }

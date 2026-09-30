@@ -50,6 +50,24 @@ impl PtouchApp {
         }
     }
 
+    /// Create a new application instance, optionally opening a `.ptl` layout file.
+    pub fn with_layout_file(
+        cc: &eframe::CreationContext<'_>,
+        layout_path: Option<String>,
+    ) -> Self {
+        let mut app = Self::new(cc);
+        if let Some(ref path_str) = layout_path {
+            let path = std::path::Path::new(path_str);
+            if let Ok(text) = std::fs::read_to_string(path)
+                && let Ok(doc) = ptouch_render::document::LabelDocument::from_toml_str(&text)
+            {
+                panels::toolbar::apply_layout(&mut app.state, doc);
+                app.state.show_setup_modal = false;
+            }
+        }
+        app
+    }
+
     /// Re-render the preview bitmap from the current element list.
     pub fn update_preview(&mut self, ctx: &egui::Context) {
         self.state.needs_rerender = false;

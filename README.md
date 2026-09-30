@@ -11,7 +11,19 @@ Using a **PT-D600 on Linux**? See the [setup guide](docs/pt-d600-linux.md)
 for USB permissions, WSL notes, an editable example and the reliability fixes
 in [ptouch-rs-notstupid](https://github.com/wakuwakumiwaku/ptouch-rs-notstupid) (originally forked from [vowstar/ptouch-rs](https://github.com/vowstar/ptouch-rs)).
 
-![ptouch-gui screenshot](https://github.com/user-attachments/assets/b18ba04d-0526-43f8-ad40-8ca29b5cb280)
+![ptouch-gui preview](docs/images/ptouch-gui-preview.png)
+
+<p align="center">
+  <em>ptouch-gui preview: clean white canvas, outlined label tape, symmetrical centered margins, and precise millimeter cut indicators</em>
+</p>
+
+<details>
+<summary><strong>📸 First-Run Setup & Cartridge Tracking Modal</strong> (click to expand)</summary>
+<br>
+
+![ptouch-gui startup modal](docs/images/ptouch-gui-setup-modal.png)
+
+</details>
 
 ## Features
 

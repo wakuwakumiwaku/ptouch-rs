@@ -177,7 +177,7 @@ fn show_print_options(ui: &mut egui::Ui, state: &mut AppState) {
         if state.cut_mode == CutMarginMode::CenteredFull {
             ui.add_space(2.0);
             ui.label(
-                egui::RichText::new("ℹ Symmetrical 24.5 mm margins on both sides (standalone PT-D600 standard)")
+                egui::RichText::new("ℹ Symmetrical 27.0 mm margins on both sides (24.5 mm lead + 2.5 mm safety)")
                     .small()
                     .color(egui::Color32::from_rgb(100, 115, 130)),
             );
