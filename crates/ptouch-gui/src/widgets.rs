@@ -212,10 +212,12 @@ pub fn save_layout_file() -> Option<PathBuf> {
 /// iOS-style toggle switch widget.
 ///
 /// Based on the egui demo toggle_switch example.
+#[allow(dead_code)]
 pub fn toggle(on: &mut bool) -> impl egui::Widget + '_ {
     move |ui: &mut egui::Ui| toggle_ui(ui, on)
 }
 
+#[allow(dead_code)]
 fn toggle_ui(ui: &mut egui::Ui, on: &mut bool) -> egui::Response {
     let desired_size = ui.spacing().interact_size.y * egui::vec2(2.0, 1.0);
     let (rect, mut response) = ui.allocate_exact_size(desired_size, egui::Sense::click());

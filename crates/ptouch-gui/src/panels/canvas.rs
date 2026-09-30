@@ -3,12 +3,13 @@
 
 //! Central canvas panel for label preview display, full tape geometry, and cut indicators.
 
-use crate::state::AppState;
+use crate::state::{AppState, CutMarginMode};
 
 /// Render the central preview canvas.
 pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
     let dpi = if state.printer_dpi > 0 { state.printer_dpi as f32 } else { 180.0 };
     let px_per_mm = dpi / 25.4;
+    let copies = state.copies.max(1);
 
     // Zoom controls and tape overview header
     ui.horizontal(|ui| {
@@ -32,59 +33,86 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
         ui.separator();
 
         if let Some(ref texture) = state.preview_texture {
-            let copies = state.copies.max(1);
-            let single_mm = texture.size_vec2().x / px_per_mm;
-            let total_mm = single_mm * copies as f32;
+            let content_mm = (texture.size_vec2().x / px_per_mm) * copies as f32;
+            let lead_mm: f32 = 24.5;
 
-            if copies > 1 {
-                ui.label(
-                    egui::RichText::new(format!(
-                        "Label: {:.1} mm (Total: {:.1} mm for {} copies)",
-                        single_mm, total_mm, copies
-                    ))
-                    .strong(),
-                );
-            } else {
-                ui.label(
-                    egui::RichText::new(format!("Label Length: {:.1} mm", single_mm)).strong(),
-                );
+            match state.cut_mode {
+                CutMarginMode::CenteredFull => {
+                    let total_tape_mm = lead_mm + content_mm + lead_mm;
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Label Length: {:.1} mm (Centered: 24.5mm + {:.1}mm + 24.5mm)",
+                            total_tape_mm, content_mm
+                        ))
+                        .strong(),
+                    );
+                    ui.separator();
+                    ui.label(
+                        egui::RichText::new("✂ Cuts: 1 (Final Cut Only • 0 Waste Scrap)")
+                            .color(egui::Color32::from_rgb(60, 140, 240)),
+                    );
+                }
+                CutMarginMode::PretrimCut => {
+                    let finished_label_mm = content_mm + (state.small_margin_mm * 2.0 * copies as f32);
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Finished Label: {:.1} mm  [+ {:.1} mm Pretrim Scrap]",
+                            finished_label_mm, lead_mm
+                        ))
+                        .strong(),
+                    );
+                    ui.separator();
+                    ui.label(
+                        egui::RichText::new("✂ Cuts: 2 (Pretrim Cut + Final Cut)")
+                            .color(egui::Color32::from_rgb(230, 50, 50)),
+                    );
+                }
+                CutMarginMode::ChainPrint => {
+                    ui.label(
+                        egui::RichText::new(format!("Chain Length: {:.1} mm", content_mm))
+                            .strong(),
+                    );
+                    ui.separator();
+                    ui.label(
+                        egui::RichText::new("✂ Cuts: 0 (Continuous Chain • No Cut)")
+                            .color(egui::Color32::from_rgb(0, 160, 90)),
+                    );
+                }
             }
-
-            ui.separator();
-
-            let (cut_text, cut_color) = if !state.auto_cut {
-                ("✂ Cuts: 0 (Continuous Chain)", egui::Color32::from_rgb(0, 160, 90))
-            } else if state.precut {
-                ("✂ Cuts: 2 (Pre-Cut + Final Cut)", egui::Color32::from_rgb(220, 50, 50))
-            } else {
-                ("✂ Cuts: 1 (Final Cut)", egui::Color32::from_rgb(60, 140, 240))
-            };
-
-            ui.label(egui::RichText::new(cut_text).color(cut_color));
         }
     });
 
     ui.separator();
 
-    // Canvas area
+    // Canvas area: NO background rect drawn so there is NO black or grey background box.
+    // The only area shown is the tape that gets printed.
     let canvas_rect = ui.available_rect_before_wrap();
     let canvas_size = canvas_rect.size();
-
-    // Natural background matching the application theme
-    let bg_color = ui.visuals().extreme_bg_color;
-    ui.painter().rect_filled(canvas_rect, 0.0, bg_color);
 
     match state.preview_texture {
         Some(ref texture) => {
             let tex_size = texture.size_vec2();
-            let copies = state.copies.max(1);
-
             let content_w_px = tex_size.x;
             let content_h_px = tex_size.y;
             let tape_physical_h_px = (state.tape_width_mm as f32 * px_per_mm).max(content_h_px);
 
-            // Total printed strip width (across all copies)
-            let total_strip_w_px = content_w_px * copies as f32;
+            let lead_mm: f32 = 24.5;
+            let lead_w_px = (lead_mm * px_per_mm).round();
+
+            // Total strip width in printer pixels (unscaled)
+            let total_strip_w_px = match state.cut_mode {
+                CutMarginMode::CenteredFull => {
+                    lead_w_px + (content_w_px * copies as f32) + lead_w_px
+                }
+                CutMarginMode::PretrimCut => {
+                    let margin_px = (state.small_margin_mm * px_per_mm).round();
+                    lead_w_px + ((margin_px + content_w_px + margin_px) * copies as f32)
+                }
+                CutMarginMode::ChainPrint => {
+                    let margin_px = (2.0 * px_per_mm).round();
+                    (margin_px + content_w_px + margin_px) * copies as f32
+                }
+            };
 
             // Calculate zoom
             let zoom = if state.zoom_fit {
@@ -102,7 +130,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
             let display_strip_w = total_strip_w_px * zoom;
             let display_tape_h = tape_physical_h_px * zoom;
 
-            // Center the entire label tape in the canvas
+            // Center the entire printed tape in the canvas
             let center = canvas_rect.center();
             let tape_rect = egui::Rect::from_center_size(
                 center,
@@ -122,7 +150,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                 egui::StrokeKind::Outside,
             );
 
-            // 2. Printable vertical guideline margins if tape is taller than content
+            // 2. Printable vertical guidelines
             let printable_h = content_h_px * zoom;
             let printable_top = tape_rect.center().y - printable_h / 2.0;
             let printable_bottom = printable_top + printable_h;
@@ -142,69 +170,204 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
             let y_bottom = tape_rect.max.y;
             let ruler_y = y_top - 28.0;
 
-            // 3. Pre-cut indicator at start (only if precut is active)
-            if state.precut && state.auto_cut {
-                draw_cut_marker(painter, tape_rect.min.x, y_top, y_bottom, "✂ PRE-CUT", true);
-            }
-
-            // 4. Render copies of label
+            let mut cur_x = tape_rect.min.x;
             let single_content_w = content_w_px * zoom;
             let single_content_mm = content_w_px / px_per_mm;
-            let mut cur_x = tape_rect.min.x;
 
-            for copy_idx in 0..copies {
-                let copy_start_x = cur_x;
-                let copy_rect = egui::Rect::from_min_size(
-                    egui::pos2(copy_start_x, printable_top),
-                    egui::vec2(single_content_w, printable_h),
-                );
+            match state.cut_mode {
+                CutMarginMode::CenteredFull => {
+                    let lead_w = lead_w_px * zoom;
 
-                // Draw label texture
-                painter.image(
-                    texture.id(),
-                    copy_rect,
-                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                    egui::Color32::WHITE,
-                );
-
-                if copies == 1 {
+                    // Leading 24.5 mm margin
+                    let lead_rect = egui::Rect::from_min_max(
+                        egui::pos2(cur_x, y_top),
+                        egui::pos2(cur_x + lead_w, y_bottom),
+                    );
+                    painter.rect_filled(lead_rect, 0.0, egui::Color32::from_gray(248));
+                    painter.text(
+                        lead_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "24.5 mm Lead Margin",
+                        egui::FontId::proportional(11.0),
+                        egui::Color32::from_gray(130),
+                    );
                     draw_dimension(
                         painter,
-                        copy_start_x,
-                        copy_start_x + single_content_w,
+                        cur_x,
+                        cur_x + lead_w,
                         ruler_y,
-                        &format!("{:.1} mm", single_content_mm),
-                        egui::Color32::from_rgb(80, 150, 240),
+                        &format!("{:.1} mm (Lead)", lead_mm),
+                        egui::Color32::from_rgb(60, 140, 220),
                     );
+                    cur_x += lead_w;
+
+                    // Content copies (centered)
+                    for copy_idx in 0..copies {
+                        let copy_start_x = cur_x;
+                        let copy_rect = egui::Rect::from_min_size(
+                            egui::pos2(copy_start_x, printable_top),
+                            egui::vec2(single_content_w, printable_h),
+                        );
+                        painter.image(
+                            texture.id(),
+                            copy_rect,
+                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                            egui::Color32::WHITE,
+                        );
+                        draw_dimension(
+                            painter,
+                            copy_start_x,
+                            copy_start_x + single_content_w,
+                            ruler_y,
+                            &format!("{:.1} mm (Content)", single_content_mm),
+                            egui::Color32::from_rgb(40, 100, 200),
+                        );
+                        cur_x += single_content_w;
+
+                        if copies > 1 && copy_idx + 1 < copies {
+                            draw_no_cut_marker(painter, cur_x, y_top, y_bottom, "⛓ Chained (0 mm)");
+                        }
+                    }
+
+                    // Trailing 24.5 mm margin
+                    let trail_rect = egui::Rect::from_min_max(
+                        egui::pos2(cur_x, y_top),
+                        egui::pos2(cur_x + lead_w, y_bottom),
+                    );
+                    painter.rect_filled(trail_rect, 0.0, egui::Color32::from_gray(248));
+                    painter.text(
+                        trail_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "24.5 mm Trail Margin",
+                        egui::FontId::proportional(11.0),
+                        egui::Color32::from_gray(130),
+                    );
+                    draw_dimension(
+                        painter,
+                        cur_x,
+                        cur_x + lead_w,
+                        ruler_y,
+                        &format!("{:.1} mm (Trail)", lead_mm),
+                        egui::Color32::from_rgb(60, 140, 220),
+                    );
+                    cur_x += lead_w;
+
+                    // Single Final Cut at the end
+                    draw_cut_marker(painter, cur_x, y_top, y_bottom, "✂ FINAL CUT", true);
                 }
+                CutMarginMode::PretrimCut => {
+                    let lead_w = lead_w_px * zoom;
+                    let margin_mm = state.small_margin_mm;
+                    let margin_w = (margin_mm * px_per_mm).round() * zoom;
 
-                cur_x += single_content_w;
+                    // 1. Scrap Snippet area (to be pre-trimmed)
+                    let scrap_rect = egui::Rect::from_min_max(
+                        egui::pos2(cur_x, y_top),
+                        egui::pos2(cur_x + lead_w, y_bottom),
+                    );
+                    painter.rect_filled(scrap_rect, 0.0, egui::Color32::from_rgb(255, 235, 235));
+                    painter.text(
+                        scrap_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "Scrap Snippet (24.5 mm)",
+                        egui::FontId::proportional(11.0),
+                        egui::Color32::from_rgb(190, 40, 40),
+                    );
+                    draw_dimension(
+                        painter,
+                        cur_x,
+                        cur_x + lead_w,
+                        ruler_y,
+                        &format!("{:.1} mm (Waste Scrap)", lead_mm),
+                        egui::Color32::from_rgb(210, 40, 40),
+                    );
+                    cur_x += lead_w;
 
-                // Between copies: explicit NO CUT chained marker
-                if copies > 1 && copy_idx + 1 < copies {
-                    draw_no_cut_marker(painter, cur_x, y_top, y_bottom, "⛓ Chained (0 mm)");
+                    // Pretrim cut marker
+                    draw_cut_marker(painter, cur_x, y_top, y_bottom, "✂ PRETRIM CUT (Scrap cut)", true);
+
+                    let finished_label_start = cur_x;
+
+                    // 2. Finished label copies
+                    for copy_idx in 0..copies {
+                        // Leading safe margin
+                        cur_x += margin_w;
+
+                        let copy_start_x = cur_x;
+                        let copy_rect = egui::Rect::from_min_size(
+                            egui::pos2(copy_start_x, printable_top),
+                            egui::vec2(single_content_w, printable_h),
+                        );
+                        painter.image(
+                            texture.id(),
+                            copy_rect,
+                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                            egui::Color32::WHITE,
+                        );
+                        cur_x += single_content_w;
+
+                        // Trailing safe margin
+                        cur_x += margin_w;
+
+                        if copies > 1 && copy_idx + 1 < copies {
+                            draw_no_cut_marker(painter, cur_x, y_top, y_bottom, "⛓ Chained (0 mm)");
+                        }
+                    }
+
+                    // Dimension of the finished label
+                    let finished_label_mm = (single_content_mm * copies as f32) + (margin_mm * 2.0 * copies as f32);
+                    draw_dimension(
+                        painter,
+                        finished_label_start,
+                        cur_x,
+                        ruler_y,
+                        &format!("{:.1} mm (Finished Label)", finished_label_mm),
+                        egui::Color32::from_rgb(40, 120, 220),
+                    );
+
+                    // Final cut marker
+                    draw_cut_marker(painter, cur_x, y_top, y_bottom, "✂ FINAL CUT", true);
+                }
+                CutMarginMode::ChainPrint => {
+                    let margin_mm = 2.0;
+                    let margin_w = (margin_mm * px_per_mm).round() * zoom;
+
+                    for copy_idx in 0..copies {
+                        cur_x += margin_w;
+
+                        let copy_start_x = cur_x;
+                        let copy_rect = egui::Rect::from_min_size(
+                            egui::pos2(copy_start_x, printable_top),
+                            egui::vec2(single_content_w, printable_h),
+                        );
+                        painter.image(
+                            texture.id(),
+                            copy_rect,
+                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                            egui::Color32::WHITE,
+                        );
+                        cur_x += single_content_w;
+                        cur_x += margin_w;
+
+                        if copies > 1 && copy_idx + 1 < copies {
+                            draw_no_cut_marker(painter, cur_x, y_top, y_bottom, "⛓ Chained (0 mm)");
+                        }
+                    }
+
+                    draw_dimension(
+                        painter,
+                        tape_rect.min.x,
+                        cur_x,
+                        ruler_y,
+                        &format!("{:.1} mm (Chain)", single_content_mm * copies as f32 + (margin_mm * 2.0 * copies as f32)),
+                        egui::Color32::from_rgb(0, 160, 90),
+                    );
+
+                    draw_continuous_indicator(painter, cur_x, y_top, y_bottom);
                 }
             }
 
-            if copies > 1 {
-                draw_dimension(
-                    painter,
-                    tape_rect.min.x,
-                    tape_rect.max.x,
-                    ruler_y,
-                    &format!("{:.1} mm ({} copies x {:.1} mm)", single_content_mm * copies as f32, copies, single_content_mm),
-                    egui::Color32::from_rgb(80, 150, 240),
-                );
-            }
-
-            // 5. End Cut Indicator
-            if state.auto_cut {
-                draw_cut_marker(painter, tape_rect.max.x, y_top, y_bottom, "✂ CUT", true);
-            } else {
-                draw_continuous_indicator(painter, tape_rect.max.x, y_top, y_bottom);
-            }
-
-            // 6. Draw Tape Width Callout
+            // Draw Tape Width Callout on the left
             painter.text(
                 egui::pos2(tape_rect.min.x - 10.0, tape_rect.center().y),
                 egui::Align2::RIGHT_CENTER,
@@ -213,14 +376,18 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                 ui.visuals().weak_text_color(),
             );
 
-            // 7. Explanatory bottom legend
+            // Explanatory bottom legend
             let legend_y = y_bottom + 30.0;
-            let legend_text = if !state.auto_cut {
-                "💡 Chain Mode: Continuous printing with 0 mm gap between labels. Click 'Feed & Cut' to cut."
-            } else if state.precut {
-                "💡 Pre-Cut Mode: Cuts before and after label for symmetrical tape margins."
-            } else {
-                "💡 Standard Auto-Cut: Prints label and cuts once at the end. Zero scrap snippets."
+            let legend_text = match state.cut_mode {
+                CutMarginMode::CenteredFull => {
+                    "💡 Centered Full (Large Margin): Hardware lead (~24.5mm) is matched by trailing margin. Text is centered. Exactly 1 cut at end."
+                }
+                CutMarginMode::PretrimCut => {
+                    "💡 Pretrim Cut (Small Margin): Pre-trims 24.5mm scrap snippet, then prints compact label with safe margins. Exactly 2 cuts."
+                }
+                CutMarginMode::ChainPrint => {
+                    "💡 Chain Print: Continuous printing with 0mm gap between labels. Exactly 0 cuts. Click 'Feed & Cut' to finish."
+                }
             };
             painter.text(
                 egui::pos2(center.x, legend_y),

@@ -39,6 +39,21 @@ impl PrinterTarget {
     }
 }
 
+/// Cut & margin behavior for tape printers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CutMarginMode {
+    /// Symmetrical label using hardware lead (~24.5mm) as front margin,
+    /// centering the text with equal trailing margin. Single cut at end. Zero scrap snippets.
+    /// Exact match for typing on the printer itself.
+    #[default]
+    CenteredFull,
+    /// Pre-trims the ~24.5mm lead as scrap, prints compact label with safe margins (default 3mm).
+    /// Two cuts: Pretrim cut + final cut. Ideal for warning signs and tight badges.
+    PretrimCut,
+    /// Continuous printing without automatic cut. Gaps between copies are minimal (0mm).
+    ChainPrint,
+}
+
 /// Commands sent from the UI thread to the printer worker.
 pub enum PrinterCommand {
     /// Find paired Bluetooth printers supported by this application.
@@ -128,6 +143,10 @@ pub struct AppState {
     pub rotation_input: String,
     /// Buffer for font search/filter in properties panel.
     pub font_search: String,
+    /// Cut & margin strategy (CenteredFull, PretrimCut, ChainPrint).
+    pub cut_mode: CutMarginMode,
+    /// Safe margin for PretrimCut in millimeters (default: 3.0 mm).
+    pub small_margin_mm: f32,
     /// Auto-cut after printing. When false, chain print mode (no cut).
     pub auto_cut: bool,
     /// Trim ~25mm hardware leader scrap before printing. Default false.
@@ -180,6 +199,8 @@ impl Default for AppState {
             status_message: "Ready".to_string(),
             rotation_input: String::new(),
             font_search: String::new(),
+            cut_mode: CutMarginMode::CenteredFull,
+            small_margin_mm: 3.0,
             auto_cut: true,
             precut: false,
             copies: 1,

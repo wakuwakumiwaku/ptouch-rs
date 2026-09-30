@@ -8,7 +8,7 @@ use log::info;
 use ptouch_core::protocol::PrintQuality;
 use ptouch_core::tape;
 
-use crate::state::{AppState, PrinterCommand};
+use crate::state::{AppState, CutMarginMode, PrinterCommand};
 
 /// Render the left sidebar.
 pub fn show_sidebar(ui: &mut egui::Ui, state: &mut AppState) {
@@ -102,43 +102,94 @@ fn show_tape_section(ui: &mut egui::Ui, state: &mut AppState) {
     });
 }
 
-/// Print options: auto-cut toggle and quality selection.
+/// Print options: cut & margin mode, copies, and quality selection.
 fn show_print_options(ui: &mut egui::Ui, state: &mut AppState) {
-    ui.heading("Print Options");
+    ui.heading("Cut & Margin Mode");
     ui.add_space(4.0);
     ui.add_enabled_ui(!state.printer_target.is_bluetooth(), |ui| {
-        ui.horizontal(|ui| {
-            let label = if state.auto_cut { "Auto cut" } else { "Chain print (no cut)" };
-            ui.label(label);
-            ui.add(crate::widgets::toggle(&mut state.auto_cut));
-        });
-        if !state.auto_cut {
-            ui.label(
-                egui::RichText::new("Chain mode: prints continuously with 0mm waste. Click 'Feed & Cut' in toolbar when done.")
-                    .small()
-                    .color(egui::Color32::from_rgb(160, 160, 160)),
-            );
-        } else {
+        let prev_mode = state.cut_mode;
+
+        ui.radio_value(
+            &mut state.cut_mode,
+            CutMarginMode::CenteredFull,
+            "Centered Full (Large Margin)",
+        )
+        .on_hover_text(
+            "Text is centered with ~24.5 mm margins on both sides.\n\
+             Cuts once at the end. Zero scrap snippets.\n\
+             Exact match for typing on the printer itself.",
+        );
+
+        ui.radio_value(
+            &mut state.cut_mode,
+            CutMarginMode::PretrimCut,
+            "Pretrim Cut (Small Margin)",
+        )
+        .on_hover_text(
+            "Pre-trims the ~25 mm leader scrap first, then prints a compact label\n\
+             with safe margins (~3 mm) and cuts at the end.\n\
+             Ideal for warning signs, tight equipment labels, and badges.",
+        );
+
+        ui.radio_value(
+            &mut state.cut_mode,
+            CutMarginMode::ChainPrint,
+            "Chain Print (Continuous)",
+        )
+        .on_hover_text(
+            "Continuous printing without automatic cuts.\n\
+             Minimal 0 mm gap between batch copies.\n\
+             Click 'Feed & Cut' in the toolbar when finished.",
+        );
+
+        if state.cut_mode != prev_mode {
+            match state.cut_mode {
+                CutMarginMode::CenteredFull => {
+                    state.auto_cut = true;
+                    state.precut = false;
+                }
+                CutMarginMode::PretrimCut => {
+                    state.auto_cut = true;
+                    state.precut = true;
+                }
+                CutMarginMode::ChainPrint => {
+                    state.auto_cut = false;
+                    state.precut = false;
+                }
+            }
+            state.mark_dirty();
+        }
+
+        if state.cut_mode == CutMarginMode::PretrimCut {
+            ui.add_space(2.0);
             ui.horizontal(|ui| {
-                ui.checkbox(&mut state.precut, "Trim leader scrap (pre-cut)")
-                    .on_hover_text(
-                        "Brother printers physically have ~25mm between print head and cutter.\n\
-                         Enabling this snips off the 25mm blank piece before printing for symmetrical borders.\n\
-                         Disable to avoid cutting an extra scrap.",
-                    );
+                ui.label("Margin (mm):");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut state.small_margin_mm)
+                            .range(1.5..=20.0)
+                            .speed(0.5),
+                    )
+                    .changed()
+                {
+                    state.mark_dirty();
+                }
             });
         }
-        ui.add_space(2.0);
+
+        ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.label("Copies:");
             ui.add(egui::DragValue::new(&mut state.copies).range(1..=99));
         });
     });
+
     if state.printer_target.is_bluetooth() {
         ui.label("Manual cutter");
     }
 
     if state.printer_quality_modes {
+        ui.add_space(4.0);
         let quality_label = |q: PrintQuality| match q {
             PrintQuality::Standard => "Standard",
             PrintQuality::HighRes => "High resolution",

@@ -84,10 +84,42 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
             .clicked()
             && let Some(ref bitmap) = state.preview_bitmap
         {
-            let raster_lines = raster::bitmap_to_raster_lines(bitmap, state.printer_max_px);
-            let chain_print = !state.auto_cut;
-            let precut = state.precut;
+            let raw_lines = raster::bitmap_to_raster_lines(bitmap, state.printer_max_px);
+            let dpi = if state.printer_dpi > 0 { state.printer_dpi as f32 } else { 180.0 };
+            let px_per_mm = dpi / 25.4;
             let copies = state.copies.max(1);
+
+            let blank_line = vec![0u8; (state.printer_max_px as usize).div_ceil(8)];
+
+            let (raster_lines, chain_print, precut) = match state.cut_mode {
+                crate::state::CutMarginMode::CenteredFull => {
+                    // Physical hardware lead is ~24.5 mm ahead of the print head.
+                    // To center the text on the label, add matching ~24.5 mm trailing margin.
+                    let trailing_lines = (24.5 * px_per_mm).round() as usize;
+                    let mut lines = raw_lines;
+                    lines.extend(std::iter::repeat(blank_line).take(trailing_lines));
+                    (lines, false, false)
+                }
+                crate::state::CutMarginMode::PretrimCut => {
+                    // Pre-cut trims the 24.5 mm scrap first.
+                    // Add safe margins (default 3mm) so text is never cut off.
+                    let margin_lines = (state.small_margin_mm * px_per_mm).round() as usize;
+                    let mut lines = Vec::with_capacity(margin_lines * 2 + raw_lines.len());
+                    lines.extend(std::iter::repeat(blank_line.clone()).take(margin_lines));
+                    lines.extend(raw_lines);
+                    lines.extend(std::iter::repeat(blank_line).take(margin_lines));
+                    (lines, false, true)
+                }
+                crate::state::CutMarginMode::ChainPrint => {
+                    let margin_lines = (2.0 * px_per_mm).round() as usize;
+                    let mut lines = Vec::with_capacity(margin_lines * 2 + raw_lines.len());
+                    lines.extend(std::iter::repeat(blank_line.clone()).take(margin_lines));
+                    lines.extend(raw_lines);
+                    lines.extend(std::iter::repeat(blank_line).take(margin_lines));
+                    (lines, true, false)
+                }
+            };
+
             if let Some(ref tx) = state.printer_cmd_tx {
                 let _ = tx.send(PrinterCommand::Print {
                     raster_lines,
