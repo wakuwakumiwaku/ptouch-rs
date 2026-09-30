@@ -1,5 +1,9 @@
 # PT-D600 on Linux
 
+> [!IMPORTANT]
+> **Scope & Testing Disclaimer:**
+> Everything modified, patched, and documented in this project was tested and verified **strictly on the Brother P-touch PT-D600 running on Linux**.
+
 The PT-D600 is in the [USB device table](../crates/ptouch-core/src/device.rs)
 as `04f9:2074`. This is the P-Touch tape printer, not the QL-600.
 The editor and CLI send raster data directly over USB with libusb; a CUPS
