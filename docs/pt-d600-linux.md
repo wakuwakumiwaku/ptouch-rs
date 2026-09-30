@@ -8,14 +8,22 @@ queue or Brother's Windows editor is not needed.
 ## Build this fork
 
 Install a current stable Rust toolchain using [rustup](https://rustup.rs/).
-On Debian/Ubuntu, install the build dependencies and a usable text font:
 
+On Debian/Ubuntu:
 ```sh
 sudo apt install build-essential pkg-config libusb-1.0-0-dev libudev-dev \
   libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
   libxkbcommon-dev libxkbcommon-x11-0 libegl1 libgl1-mesa-dri \
   libssl-dev fonts-dejavu-core usbutils
+```
 
+On Arch Linux / CachyOS:
+```sh
+sudo pacman -S --needed base-devel git libusb systemd-libs libxkbcommon openssl
+```
+
+Build the binaries:
+```sh
 git clone https://github.com/wakuwakumiwaku/ptouch-rs.git
 cd ptouch-rs
 cargo +stable build --release --workspace --locked
@@ -23,6 +31,17 @@ cargo +stable build --release --workspace --locked
 
 The binaries are `target/release/ptouch-gui` and `target/release/ptouch`.
 Upstream release packages do not contain this fork's changes.
+
+### Desktop Integration & Installation (Optional)
+
+Install binaries and the desktop launcher to `~/.local`:
+```sh
+mkdir -p ~/.local/bin ~/.local/share/applications ~/.local/share/icons/hicolor/scalable/apps
+ln -sf "$(pwd)/target/release/ptouch" ~/.local/bin/ptouch
+ln -sf "$(pwd)/target/release/ptouch-gui" ~/.local/bin/ptouch-gui
+cp data/io.github.vowstar.ptouch-gui.desktop ~/.local/share/applications/
+cp data/io.github.vowstar.ptouch-gui.svg ~/.local/share/icons/hicolor/scalable/apps/
+```
 
 ## Design a label before connecting the printer
 
@@ -82,7 +101,14 @@ preview, then click **Print**. These CLI commands actually consume tape:
 
 Use the example's print command only with a matching 12 mm cartridge. If a job
 fails, inspect the printer and label before retrying; a partially printed job
-is not automatically replayed.
+### Disconnects or `usblp` driver conflicts
+
+If the printer appears briefly in `dmesg` and immediately disconnects, the kernel's legacy `usblp` (USB line printer) module is claiming the device and resetting the USB controller. Blacklist it so userspace `libusb` can communicate without interference:
+
+```sh
+sudo modprobe -r usblp
+echo "blacklist usblp" | sudo tee /etc/modprobe.d/blacklist-usblp.conf
+```
 
 ### Headless sessions and WSL permissions
 
