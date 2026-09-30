@@ -24,8 +24,8 @@ sudo pacman -S --needed base-devel git libusb systemd-libs libxkbcommon openssl
 
 Build the binaries:
 ```sh
-git clone https://github.com/wakuwakumiwaku/ptouch-rs.git
-cd ptouch-rs
+git clone https://github.com/wakuwakumiwaku/ptouch-rs-notstupid.git
+cd ptouch-rs-notstupid
 cargo +stable build --release --workspace --locked
 ```
 

@@ -1,11 +1,11 @@
-# ptouch-rs
+# ptouch-rs-notstupid
 
 Rust tool for Brother P-Touch USB label printers. CLI and GUI.
 Optional native macOS Bluetooth support is available in `ptouch-core` for the PT-P300BT.
 
 Using a **PT-D600 on Linux**? See the [setup guide](docs/pt-d600-linux.md)
 for USB permissions, WSL notes, an editable example and the reliability fixes
-in this fork of [vowstar/ptouch-rs](https://github.com/vowstar/ptouch-rs).
+in [ptouch-rs-notstupid](https://github.com/wakuwakumiwaku/ptouch-rs-notstupid) (originally forked from [vowstar/ptouch-rs](https://github.com/vowstar/ptouch-rs)).
 
 ![ptouch-gui screenshot](https://github.com/user-attachments/assets/b18ba04d-0526-43f8-ad40-8ca29b5cb280)
 

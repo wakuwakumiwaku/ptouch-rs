@@ -15,7 +15,7 @@ version = "0.8.2"
 edition = "2024"
 authors = ["Huang Rui <vowstar@gmail.com>"]
 license = "GPL-3.0-or-later"
-repository = "https://github.com/vowstar/ptouch-rs"
+repository = "https://github.com/wakuwakumiwaku/ptouch-rs-notstupid"
 
 [profile.release]
 opt-level = 2
