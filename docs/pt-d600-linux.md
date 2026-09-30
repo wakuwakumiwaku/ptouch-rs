@@ -150,6 +150,32 @@ Use `usbipd detach --busid <busid>` to return it. This is separate from running
 the native Windows binary; do not replace Windows drivers with Zadig merely
 to use the Linux build in WSL.
 
+## Tape Waste & Margin Mechanics on PT-D600
+
+Brother P-Touch printers physically have approximately 25 mm (~1 inch) of distance
+between the thermal printhead and the exit cutter blade. Because TZe cartridges
+contain separate base tape, ink ribbon, and laminating film layers that only feed
+forward, the printer cannot mechanically reverse tape.
+
+When a cut is performed, the 25 mm of tape between the printhead and the cutter has
+already moved past the printhead.
+
+This project provides three ways to handle this in `ptouch-gui` and `ptouch-cli`:
+
+1. **Auto Cut (Default)**:
+   - Prints the label and cuts once at the end.
+   - Does **not** snip an extra waste scrap before printing (`precut = false`).
+2. **Chain Print / No Cut (Zero Waste for batches)**:
+   - In `ptouch-gui`, toggle "Auto cut" to **"Chain print (no cut)"** (or pass `--chain` in CLI).
+   - Subsequent labels print back-to-back with **0 mm wasted tape** between them.
+   - When finished with your batch, click **"Feed & Cut"** in the toolbar.
+3. **Multi-Copy Batching**:
+   - Set **Copies** (in GUI or `-n` in CLI). All intermediate copies are automatically
+     chained with zero waste between them, cutting only after the final copy.
+4. **Trim Leader (Pre-cut)**:
+   - Enable "Trim leader scrap (pre-cut)" in GUI (or `--precut` in CLI).
+   - The printer will snip off the 25 mm leader before printing for symmetrical margins.
+
 ## Reliability changes in this fork
 
 - Accumulate fragmented USB status replies and report cutter/error/power-off

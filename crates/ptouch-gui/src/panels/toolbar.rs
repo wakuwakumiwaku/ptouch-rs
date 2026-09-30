@@ -86,17 +86,23 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
         {
             let raster_lines = raster::bitmap_to_raster_lines(bitmap, state.printer_max_px);
             let chain_print = !state.auto_cut;
-            let auto_cut = state.auto_cut;
+            let precut = state.precut;
+            let copies = state.copies.max(1);
             if let Some(ref tx) = state.printer_cmd_tx {
                 let _ = tx.send(PrinterCommand::Print {
                     raster_lines,
                     chain_print,
-                    auto_cut,
+                    precut,
+                    copies,
                     quality: state.print_quality,
                     target: state.printer_target.clone(),
                 });
                 state.operation_in_progress = true;
-                state.status_message = "Printing...".to_string();
+                state.status_message = if copies > 1 {
+                    format!("Printing {copies} copies...")
+                } else {
+                    "Printing...".to_string()
+                };
             }
         }
 

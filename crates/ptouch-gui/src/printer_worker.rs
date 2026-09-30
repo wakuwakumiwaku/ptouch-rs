@@ -39,7 +39,8 @@ pub fn printer_worker(
             Ok(PrinterCommand::Print {
                 raster_lines,
                 chain_print,
-                auto_cut,
+                precut,
+                copies,
                 quality,
                 target,
             }) => {
@@ -50,7 +51,8 @@ pub fn printer_worker(
                     &ctx,
                     &raster_lines,
                     chain_print,
-                    auto_cut,
+                    precut,
+                    copies,
                     quality,
                 );
             }
@@ -177,11 +179,12 @@ fn do_print(
     ctx: &egui::Context,
     raster_lines: &[Vec<u8>],
     chain_print: bool,
-    auto_cut: bool,
+    precut: bool,
+    copies: u32,
     quality: PrintQuality,
 ) {
     let result = match target {
-        PrinterTarget::Usb => print_usb(raster_lines, chain_print, auto_cut, quality),
+        PrinterTarget::Usb => print_usb(raster_lines, chain_print, precut, copies, quality),
         #[cfg(any(target_os = "macos", test))]
         PrinterTarget::Bluetooth { address, .. } => print_bluetooth(address, raster_lines),
     };
@@ -198,16 +201,23 @@ fn do_print(
 fn print_usb(
     raster_lines: &[Vec<u8>],
     chain_print: bool,
-    auto_cut: bool,
+    precut: bool,
+    copies: u32,
     quality: PrintQuality,
 ) -> Result<(), String> {
     let mut dev = PtouchDevice::open_first().map_err(|e| format!("Connect error: {e}"))?;
     dev.init().map_err(|e| format!("Init error: {e}"))?;
-    let result = dev
-        .print_raster(raster_lines, chain_print, auto_cut, quality)
-        .map_err(|e| format!("Print error: {e}"));
+    let copies = copies.max(1);
+    for copy in 1..=copies {
+        let is_last = copy == copies;
+        let is_first = copy == 1;
+        let chain_this_copy = if is_last { chain_print } else { true };
+        let precut_this_copy = if is_first { precut } else { false };
+        dev.print_raster(raster_lines, chain_this_copy, precut_this_copy, quality)
+            .map_err(|e| format!("Print error (copy {copy}/{copies}): {e}"))?;
+    }
     let _ = dev.close();
-    result
+    Ok(())
 }
 
 #[cfg(any(target_os = "macos", test))]

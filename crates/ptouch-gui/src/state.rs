@@ -49,7 +49,8 @@ pub enum PrinterCommand {
     Print {
         raster_lines: Vec<Vec<u8>>,
         chain_print: bool,
-        auto_cut: bool,
+        precut: bool,
+        copies: u32,
         quality: PrintQuality,
         target: PrinterTarget,
     },
@@ -129,6 +130,10 @@ pub struct AppState {
     pub font_search: String,
     /// Auto-cut after printing. When false, chain print mode (no cut).
     pub auto_cut: bool,
+    /// Trim ~25mm hardware leader scrap before printing. Default false.
+    pub precut: bool,
+    /// Number of copies to print. Chained automatically to eliminate waste.
+    pub copies: u32,
     /// Whether a printer is currently connected (detected by background poll).
     pub printer_connected: bool,
     /// Target selected for polling and printing.
@@ -176,6 +181,8 @@ impl Default for AppState {
             rotation_input: String::new(),
             font_search: String::new(),
             auto_cut: true,
+            precut: false,
+            copies: 1,
             printer_connected: false,
             printer_target: PrinterTarget::Usb,
             bluetooth_targets: Vec::new(),

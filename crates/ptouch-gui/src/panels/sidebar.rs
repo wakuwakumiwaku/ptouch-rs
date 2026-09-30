@@ -108,10 +108,31 @@ fn show_print_options(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add_space(4.0);
     ui.add_enabled_ui(!state.printer_target.is_bluetooth(), |ui| {
         ui.horizontal(|ui| {
-            let label = if state.auto_cut { "Auto cut" } else { "No cut" };
+            let label = if state.auto_cut { "Auto cut" } else { "Chain print (no cut)" };
             ui.label(label);
             ui.add(crate::widgets::toggle(&mut state.auto_cut));
-        })
+        });
+        if !state.auto_cut {
+            ui.label(
+                egui::RichText::new("Chain mode: prints continuously with 0mm waste. Click 'Feed & Cut' in toolbar when done.")
+                    .small()
+                    .color(egui::Color32::from_rgb(160, 160, 160)),
+            );
+        } else {
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut state.precut, "Trim leader scrap (pre-cut)")
+                    .on_hover_text(
+                        "Brother printers physically have ~25mm between print head and cutter.\n\
+                         Enabling this snips off the 25mm blank piece before printing for symmetrical borders.\n\
+                         Disable to avoid cutting an extra scrap.",
+                    );
+            });
+        }
+        ui.add_space(2.0);
+        ui.horizontal(|ui| {
+            ui.label("Copies:");
+            ui.add(egui::DragValue::new(&mut state.copies).range(1..=99));
+        });
     });
     if state.printer_target.is_bluetooth() {
         ui.label("Manual cutter");
