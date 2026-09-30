@@ -145,8 +145,6 @@ pub struct AppState {
     pub font_search: String,
     /// Cut & margin strategy (CenteredFull, PretrimCut, ChainPrint).
     pub cut_mode: CutMarginMode,
-    /// Symmetrical safe margin for CenteredFull in millimeters (default: 15.0 mm).
-    pub centered_margin_mm: f32,
     /// Safe margin for PretrimCut in millimeters (default: 3.0 mm).
     pub small_margin_mm: f32,
     /// Whether the initial tape & cartridge setup modal is open.
@@ -210,7 +208,6 @@ impl Default for AppState {
             rotation_input: String::new(),
             font_search: String::new(),
             cut_mode: CutMarginMode::CenteredFull,
-            centered_margin_mm: 15.0,
             small_margin_mm: 3.0,
             show_setup_modal: true,
             cartridge_total_length_m: None,

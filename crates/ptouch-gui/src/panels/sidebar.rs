@@ -176,24 +176,10 @@ fn show_print_options(ui: &mut egui::Ui, state: &mut AppState) {
 
         if state.cut_mode == CutMarginMode::CenteredFull {
             ui.add_space(2.0);
-            ui.horizontal(|ui| {
-                ui.label("Safety Margin (mm):");
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut state.centered_margin_mm)
-                            .range(5.0..=50.0)
-                            .speed(0.5),
-                    )
-                    .changed()
-                {
-                    state.mark_dirty();
-                }
-            })
-            .response
-            .on_hover_text(
-                "Symmetrical safety margin added before and after text.\n\
-                 Prevents the first letters on the left from being cut off\n\
-                 and centers the text with matching margins.",
+            ui.label(
+                egui::RichText::new("ℹ Symmetrical 24.5 mm margins on both sides (standalone PT-D600 standard)")
+                    .small()
+                    .color(egui::Color32::from_rgb(100, 115, 130)),
             );
         }
 

@@ -38,19 +38,18 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
 
             match state.cut_mode {
                 CutMarginMode::CenteredFull => {
-                    let margin_mm = state.centered_margin_mm;
-                    let total_tape_mm = margin_mm + content_mm + margin_mm;
+                    let total_tape_mm = lead_mm + content_mm + lead_mm;
                     ui.label(
                         egui::RichText::new(format!(
-                            "Label Length: {:.1} mm (Centered: {:.1}mm + {:.1}mm + {:.1}mm)",
-                            total_tape_mm, margin_mm, content_mm, margin_mm
+                            "Label Length: {:.1} mm (Centered: {:.1}mm left + {:.1}mm text + {:.1}mm right)",
+                            total_tape_mm, lead_mm, content_mm, lead_mm
                         ))
                         .strong(),
                     );
                     ui.separator();
                     ui.label(
-                        egui::RichText::new("✂ Cuts: 1 (Final Cut • Safe Margins • 0 Scrap)")
-                            .color(egui::Color32::from_rgb(60, 140, 240)),
+                        egui::RichText::new("✂ Cuts: 1 (Final Cut • Same Blank Space Both Sides • 0 Scrap)")
+                            .color(egui::Color32::from_rgb(40, 100, 200)),
                     );
                 }
                 CutMarginMode::PretrimCut => {
@@ -132,8 +131,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
             // Total strip width in printer pixels (unscaled)
             let total_strip_w_px = match state.cut_mode {
                 CutMarginMode::CenteredFull => {
-                    let margin_px = (state.centered_margin_mm * px_per_mm).round();
-                    margin_px + (content_w_px * copies as f32) + margin_px
+                    lead_w_px + (content_w_px * copies as f32) + lead_w_px
                 }
                 CutMarginMode::PretrimCut => {
                     let margin_px = (state.small_margin_mm * px_per_mm).round();
@@ -208,31 +206,30 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
 
             match state.cut_mode {
                 CutMarginMode::CenteredFull => {
-                    let margin_mm = state.centered_margin_mm;
-                    let margin_w = (margin_mm * px_per_mm).round() * zoom;
+                    let lead_w = lead_w_px * zoom;
 
-                    // Leading safety margin
+                    // Leading blank margin (hardware lead ahead of print head)
                     let lead_rect = egui::Rect::from_min_max(
                         egui::pos2(cur_x, y_top),
-                        egui::pos2(cur_x + margin_w, y_bottom),
+                        egui::pos2(cur_x + lead_w, y_bottom),
                     );
                     painter.rect_filled(lead_rect, 0.0, egui::Color32::from_gray(248));
                     painter.text(
                         lead_rect.center(),
                         egui::Align2::CENTER_CENTER,
-                        format!("{:.1} mm Safety Margin", margin_mm),
+                        format!("{:.1} mm Blank Margin", lead_mm),
                         egui::FontId::proportional(11.0),
                         egui::Color32::from_gray(130),
                     );
                     draw_dimension(
                         painter,
                         cur_x,
-                        cur_x + margin_w,
+                        cur_x + lead_w,
                         ruler_y,
-                        &format!("{:.1} mm (Margin)", margin_mm),
+                        &format!("{:.1} mm (Margin)", lead_mm),
                         egui::Color32::from_rgb(60, 140, 220),
                     );
-                    cur_x += margin_w;
+                    cur_x += lead_w;
 
                     // Content copies (centered)
                     for copy_idx in 0..copies {
@@ -262,28 +259,28 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                         }
                     }
 
-                    // Trailing safety margin
+                    // Trailing blank margin (identical to left side, fed before cut)
                     let trail_rect = egui::Rect::from_min_max(
                         egui::pos2(cur_x, y_top),
-                        egui::pos2(cur_x + margin_w, y_bottom),
+                        egui::pos2(cur_x + lead_w, y_bottom),
                     );
                     painter.rect_filled(trail_rect, 0.0, egui::Color32::from_gray(248));
                     painter.text(
                         trail_rect.center(),
                         egui::Align2::CENTER_CENTER,
-                        format!("{:.1} mm Safety Margin", margin_mm),
+                        format!("{:.1} mm Blank Margin", lead_mm),
                         egui::FontId::proportional(11.0),
                         egui::Color32::from_gray(130),
                     );
                     draw_dimension(
                         painter,
                         cur_x,
-                        cur_x + margin_w,
+                        cur_x + lead_w,
                         ruler_y,
-                        &format!("{:.1} mm (Margin)", margin_mm),
+                        &format!("{:.1} mm (Margin)", lead_mm),
                         egui::Color32::from_rgb(60, 140, 220),
                     );
-                    cur_x += margin_w;
+                    cur_x += lead_w;
 
                     // Single Final Cut at the end
                     draw_cut_marker(painter, cur_x, y_top, y_bottom, "✂ FINAL CUT", true);

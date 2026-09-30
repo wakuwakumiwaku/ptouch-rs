@@ -93,15 +93,12 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
 
             let (raster_lines, chain_print, precut) = match state.cut_mode {
                 crate::state::CutMarginMode::CenteredFull => {
-                    // Symmetrical safety margins: add safe blank lines BEFORE the text
-                    // (preventing the first letters from getting cut off)
-                    // and matching trailing lines AFTER the text so it's perfectly centered!
-                    let margin_lines = (state.centered_margin_mm * px_per_mm).round() as usize;
-                    let mut lines = Vec::with_capacity(margin_lines * 2 + raw_lines.len());
-                    lines.extend(std::iter::repeat(blank_line.clone()).take(margin_lines));
-                    lines.extend(raw_lines);
-                    lines.extend(std::iter::repeat(blank_line).take(margin_lines));
-                    (lines, false, false)
+                    // Left side physically has the hardware lead (~24.5mm) already ahead of the print head.
+                    // The final cut command (0x1A) automatically feeds the tape ~24.5mm past the print head
+                    // to the cutter blade.
+                    // Thus, sending raw lines directly produces identical ~24.5mm blank space
+                    // on both left and right sides — perfectly centered with 0 scrap, matching standalone printer typing.
+                    (raw_lines, false, false)
                 }
                 crate::state::CutMarginMode::PretrimCut => {
                     // Pre-cut trims the 24.5 mm scrap first.
@@ -124,7 +121,12 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
             };
 
             // Track cumulative tape consumption
-            let total_job_mm = (raster_lines.len() as f32 / px_per_mm) * copies as f32;
+            let total_job_mm = match state.cut_mode {
+                crate::state::CutMarginMode::CenteredFull => {
+                    (24.5 + (raster_lines.len() as f32 / px_per_mm) + 24.5) * copies as f32
+                }
+                _ => (raster_lines.len() as f32 / px_per_mm) * copies as f32,
+            };
             state.tape_printed_meters += total_job_mm / 1000.0;
 
             if let Some(ref tx) = state.printer_cmd_tx {
