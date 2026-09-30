@@ -375,7 +375,7 @@ fn show_image_properties(ui: &mut egui::Ui, props: ImageProps, state: &mut AppSt
     }
 
     if ui.button("Change File...").clicked()
-        && let Some(new_path) = crate::widgets::image_file_dialog().pick_file()
+        && let Some(new_path) = crate::widgets::pick_image_file()
         && load_image_into(&new_path, image_data, bitmap)
     {
         info!("Changed image to: {}", new_path.display());

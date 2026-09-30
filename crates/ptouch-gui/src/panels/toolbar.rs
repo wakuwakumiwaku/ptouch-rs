@@ -32,7 +32,7 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
         }
 
         if ui.button("Add Image").clicked()
-            && let Some(path) = crate::widgets::image_file_dialog().pick_file()
+            && let Some(path) = crate::widgets::pick_image_file()
         {
             // Read the original source bytes so the image is embedded in the
             // label and stays self-contained when saved to a layout file.
@@ -162,10 +162,7 @@ fn do_save_layout(state: &mut AppState) {
         }
     };
 
-    if let Some(path) = crate::widgets::layout_file_dialog()
-        .set_file_name("label.ptl")
-        .save_file()
-    {
+    if let Some(path) = crate::widgets::save_layout_file() {
         let save_path: PathBuf = if path.extension().is_none() {
             path.with_extension("ptl")
         } else {
@@ -186,7 +183,7 @@ fn do_save_layout(state: &mut AppState) {
 
 /// Open a `.ptl` layout file, replacing the current design.
 fn do_open_layout(state: &mut AppState) {
-    let Some(path) = crate::widgets::layout_file_dialog().pick_file() else {
+    let Some(path) = crate::widgets::pick_layout_file() else {
         return;
     };
 
@@ -236,16 +233,7 @@ fn do_export_image(state: &mut AppState) {
         }
     };
 
-    if let Some(path) = rfd::FileDialog::new()
-        .add_filter("PNG", &["png"])
-        .add_filter("JPEG", &["jpg", "jpeg"])
-        .add_filter("BMP", &["bmp"])
-        .add_filter("GIF", &["gif"])
-        .add_filter("TIFF", &["tiff", "tif"])
-        .add_filter("WebP", &["webp"])
-        .set_file_name("label.png")
-        .save_file()
-    {
+    if let Some(path) = crate::widgets::save_image_file() {
         let save_path: PathBuf = if path.extension().is_none() {
             path.with_extension("png")
         } else {
