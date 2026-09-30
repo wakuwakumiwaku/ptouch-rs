@@ -33,30 +33,31 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
 
         if let Some(ref texture) = state.preview_texture {
             let copies = state.copies.max(1);
-            let content_mm = (texture.size_vec2().x / px_per_mm) * copies as f32;
-            let lead_mm: f32 = 24.5;
-            let trail_mm: f32 = if state.auto_cut { 2.0 } else { 0.0 };
-            let total_tape_mm = if state.precut && state.auto_cut {
-                lead_mm + 2.0 + content_mm + trail_mm
-            } else if state.auto_cut {
-                lead_mm + content_mm + trail_mm
-            } else {
-                lead_mm + content_mm
-            };
+            let single_mm = texture.size_vec2().x / px_per_mm;
+            let total_mm = single_mm * copies as f32;
 
-            ui.label(
-                egui::RichText::new(format!("Total Tape: {:.1} mm", total_tape_mm))
+            if copies > 1 {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Label: {:.1} mm (Total: {:.1} mm for {} copies)",
+                        single_mm, total_mm, copies
+                    ))
                     .strong(),
-            );
+                );
+            } else {
+                ui.label(
+                    egui::RichText::new(format!("Label Length: {:.1} mm", single_mm)).strong(),
+                );
+            }
 
             ui.separator();
 
             let (cut_text, cut_color) = if !state.auto_cut {
-                ("✂ Cuts: 0 (Chain Print - No Cuts)", egui::Color32::from_rgb(0, 140, 80))
+                ("✂ Cuts: 0 (Continuous Chain)", egui::Color32::from_rgb(0, 160, 90))
             } else if state.precut {
-                ("✂ Cuts: 2 (Pre-Cut Scrap + Final Cut)", egui::Color32::from_rgb(200, 40, 40))
+                ("✂ Cuts: 2 (Pre-Cut + Final Cut)", egui::Color32::from_rgb(220, 50, 50))
             } else {
-                ("✂ Cuts: 1 (Final Cut Only - No Waste Scrap)", egui::Color32::from_rgb(30, 100, 200))
+                ("✂ Cuts: 1 (Final Cut)", egui::Color32::from_rgb(60, 140, 240))
             };
 
             ui.label(egui::RichText::new(cut_text).color(cut_color));
@@ -69,9 +70,9 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
     let canvas_rect = ui.available_rect_before_wrap();
     let canvas_size = canvas_rect.size();
 
-    // Fill the background with neutral canvas gray
-    ui.painter()
-        .rect_filled(canvas_rect, 0.0, egui::Color32::from_gray(215));
+    // Natural background matching the application theme
+    let bg_color = ui.visuals().extreme_bg_color;
+    ui.painter().rect_filled(canvas_rect, 0.0, bg_color);
 
     match state.preview_texture {
         Some(ref texture) => {
@@ -80,31 +81,17 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
 
             let content_w_px = tex_size.x;
             let content_h_px = tex_size.y;
-
-            let lead_mm: f32 = 24.5;
-            let lead_w_px = (lead_mm * px_per_mm).round();
-            let trail_mm: f32 = if state.auto_cut { 2.0 } else { 0.0 };
-            let trail_w_px = (trail_mm * px_per_mm).round();
-            let margin_precut_mm: f32 = 2.0;
-            let margin_precut_px = (margin_precut_mm * px_per_mm).round();
-
             let tape_physical_h_px = (state.tape_width_mm as f32 * px_per_mm).max(content_h_px);
 
-            // Total strip width in printer pixels (unscaled)
-            let total_strip_w_px = if state.precut && state.auto_cut {
-                lead_w_px + margin_precut_px + (content_w_px * copies as f32) + trail_w_px
-            } else if state.auto_cut {
-                lead_w_px + (content_w_px * copies as f32) + trail_w_px
-            } else {
-                lead_w_px + (content_w_px * copies as f32) + (15.0 * px_per_mm).round()
-            };
+            // Total printed strip width (across all copies)
+            let total_strip_w_px = content_w_px * copies as f32;
 
             // Calculate zoom
             let zoom = if state.zoom_fit {
                 let margin_x = 80.0;
-                let margin_y = 130.0;
-                let zoom_x = (canvas_size.x - margin_x) / total_strip_w_px;
-                let zoom_y = (canvas_size.y - margin_y) / (tape_physical_h_px + 60.0);
+                let margin_y = 110.0;
+                let zoom_x = (canvas_size.x - margin_x) / total_strip_w_px.max(1.0);
+                let zoom_y = (canvas_size.y - margin_y) / (tape_physical_h_px + 50.0).max(1.0);
                 let fit_zoom = zoom_x.min(zoom_y).clamp(0.05, 10.0);
                 state.zoom = fit_zoom;
                 fit_zoom
@@ -115,7 +102,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
             let display_strip_w = total_strip_w_px * zoom;
             let display_tape_h = tape_physical_h_px * zoom;
 
-            // Center the entire tape strip in the canvas
+            // Center the entire label tape in the canvas
             let center = canvas_rect.center();
             let tape_rect = egui::Rect::from_center_size(
                 center,
@@ -126,109 +113,44 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
 
             // 1. Draw tape shadow and physical tape body
             let shadow_rect = tape_rect.translate(egui::vec2(2.0, 3.0));
-            painter.rect_filled(shadow_rect, 4.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 35));
-            painter.rect_filled(tape_rect, 4.0, egui::Color32::from_rgb(255, 255, 255));
+            painter.rect_filled(shadow_rect, 3.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 45));
+            painter.rect_filled(tape_rect, 3.0, egui::Color32::WHITE);
             painter.rect_stroke(
                 tape_rect,
-                4.0,
-                egui::Stroke::new(1.5, egui::Color32::from_gray(160)),
+                3.0,
+                egui::Stroke::new(1.0, egui::Color32::from_gray(180)),
                 egui::StrokeKind::Outside,
             );
 
-            // 2. Draw printable vertical band guidelines (centered vertically)
+            // 2. Printable vertical guideline margins if tape is taller than content
             let printable_h = content_h_px * zoom;
             let printable_top = tape_rect.center().y - printable_h / 2.0;
             let printable_bottom = printable_top + printable_h;
-            let guideline_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(230));
-            painter.line_segment(
-                [egui::pos2(tape_rect.min.x, printable_top), egui::pos2(tape_rect.max.x, printable_top)],
-                guideline_stroke,
-            );
-            painter.line_segment(
-                [egui::pos2(tape_rect.min.x, printable_bottom), egui::pos2(tape_rect.max.x, printable_bottom)],
-                guideline_stroke,
-            );
-
-            let start_x = tape_rect.min.x;
-            let mut cur_x = start_x;
+            if tape_physical_h_px > content_h_px {
+                let guideline_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(230));
+                painter.line_segment(
+                    [egui::pos2(tape_rect.min.x, printable_top), egui::pos2(tape_rect.max.x, printable_top)],
+                    guideline_stroke,
+                );
+                painter.line_segment(
+                    [egui::pos2(tape_rect.min.x, printable_bottom), egui::pos2(tape_rect.max.x, printable_bottom)],
+                    guideline_stroke,
+                );
+            }
 
             let y_top = tape_rect.min.y;
             let y_bottom = tape_rect.max.y;
-            let ruler_y = y_top - 34.0;
+            let ruler_y = y_top - 28.0;
 
-            // 3. Render Leading Zone
+            // 3. Pre-cut indicator at start (only if precut is active)
             if state.precut && state.auto_cut {
-                // Scrap area to be cut off
-                let scrap_w = lead_w_px * zoom;
-                let scrap_rect = egui::Rect::from_min_max(
-                    egui::pos2(cur_x, y_top),
-                    egui::pos2(cur_x + scrap_w, y_bottom),
-                );
-                painter.rect_filled(scrap_rect, 0.0, egui::Color32::from_rgb(255, 235, 235));
-                draw_stripes(painter, scrap_rect, egui::Color32::from_rgba_unmultiplied(230, 80, 80, 40));
-
-                painter.text(
-                    scrap_rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "Scrap (~25mm)",
-                    egui::FontId::proportional(11.0),
-                    egui::Color32::from_rgb(180, 40, 40),
-                );
-
-                draw_dimension(painter, cur_x, cur_x + scrap_w, ruler_y, &format!("{:.1} mm (Scrap)", lead_mm), egui::Color32::from_rgb(180, 40, 40));
-
-                cur_x += scrap_w;
-
-                // PRE-CUT line
-                draw_cut_marker(painter, cur_x, y_top, y_bottom, "✂ PRE-CUT (Scrap cut here)", true);
-
-                // Margin between precut and content
-                let margin_w = margin_precut_px * zoom;
-                cur_x += margin_w;
-            } else if state.auto_cut {
-                // Normal auto-cut: leading unprinted hardware gap
-                let lead_w = lead_w_px * zoom;
-                let lead_rect = egui::Rect::from_min_max(
-                    egui::pos2(cur_x, y_top),
-                    egui::pos2(cur_x + lead_w, y_bottom),
-                );
-                painter.rect_filled(lead_rect, 0.0, egui::Color32::from_gray(245));
-                draw_stripes(painter, lead_rect, egui::Color32::from_rgba_unmultiplied(160, 160, 160, 25));
-
-                painter.text(
-                    lead_rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "Hardware Lead (~25mm)",
-                    egui::FontId::proportional(11.0),
-                    egui::Color32::from_gray(120),
-                );
-
-                // Start of tape marker (from previous cut)
-                draw_cut_marker(painter, cur_x, y_top, y_bottom, "Previous Cut (Tape Start)", false);
-                draw_dimension(painter, cur_x, cur_x + lead_w, ruler_y, &format!("{:.1} mm (Lead)", lead_mm), egui::Color32::from_gray(100));
-
-                cur_x += lead_w;
-            } else {
-                // Chain mode: show lead/start
-                let lead_w = (lead_w_px * 0.5) * zoom;
-                let lead_rect = egui::Rect::from_min_max(
-                    egui::pos2(cur_x, y_top),
-                    egui::pos2(cur_x + lead_w, y_bottom),
-                );
-                painter.rect_filled(lead_rect, 0.0, egui::Color32::from_gray(248));
-                painter.text(
-                    lead_rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "Start",
-                    egui::FontId::proportional(10.0),
-                    egui::Color32::from_gray(140),
-                );
-                cur_x += lead_w;
+                draw_cut_marker(painter, tape_rect.min.x, y_top, y_bottom, "✂ PRE-CUT", true);
             }
 
-            // 4. Render Copies and Elements
+            // 4. Render copies of label
             let single_content_w = content_w_px * zoom;
             let single_content_mm = content_w_px / px_per_mm;
+            let mut cur_x = tape_rect.min.x;
 
             for copy_idx in 0..copies {
                 let copy_start_x = cur_x;
@@ -245,77 +167,79 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                     egui::Color32::WHITE,
                 );
 
-                draw_dimension(
-                    painter,
-                    copy_start_x,
-                    copy_start_x + single_content_w,
-                    ruler_y,
-                    &format!("{:.1} mm (Label)", single_content_mm),
-                    egui::Color32::from_rgb(40, 40, 160),
-                );
+                if copies == 1 {
+                    draw_dimension(
+                        painter,
+                        copy_start_x,
+                        copy_start_x + single_content_w,
+                        ruler_y,
+                        &format!("{:.1} mm", single_content_mm),
+                        egui::Color32::from_rgb(80, 150, 240),
+                    );
+                }
 
                 cur_x += single_content_w;
 
                 // Between copies: explicit NO CUT chained marker
                 if copies > 1 && copy_idx + 1 < copies {
-                    draw_no_cut_marker(painter, cur_x, y_top, y_bottom, "⛓ Chained (No Cut)");
+                    draw_no_cut_marker(painter, cur_x, y_top, y_bottom, "⛓ Chained (0 mm)");
                 }
             }
 
-            // 5. Render Trailing Zone and End Cut
+            if copies > 1 {
+                draw_dimension(
+                    painter,
+                    tape_rect.min.x,
+                    tape_rect.max.x,
+                    ruler_y,
+                    &format!("{:.1} mm ({} copies x {:.1} mm)", single_content_mm * copies as f32, copies, single_content_mm),
+                    egui::Color32::from_rgb(80, 150, 240),
+                );
+            }
+
+            // 5. End Cut Indicator
             if state.auto_cut {
-                let trail_w = trail_w_px * zoom;
-                cur_x += trail_w;
-
-                // FINAL CUT line
-                draw_cut_marker(painter, cur_x, y_top, y_bottom, "✂ FINAL CUT", true);
-
-                if trail_w > 2.0 {
-                    draw_dimension(painter, cur_x - trail_w, cur_x, ruler_y, &format!("{:.1} mm", trail_mm), egui::Color32::from_gray(100));
-                }
+                draw_cut_marker(painter, tape_rect.max.x, y_top, y_bottom, "✂ CUT", true);
             } else {
-                // Chain print / No cut indicator
-                draw_continuous_indicator(painter, cur_x, y_top, y_bottom);
+                draw_continuous_indicator(painter, tape_rect.max.x, y_top, y_bottom);
             }
 
             // 6. Draw Tape Width Callout
             painter.text(
-                egui::pos2(tape_rect.min.x - 8.0, tape_rect.center().y),
+                egui::pos2(tape_rect.min.x - 10.0, tape_rect.center().y),
                 egui::Align2::RIGHT_CENTER,
                 format!("{} mm", state.tape_width_mm),
                 egui::FontId::proportional(11.0),
-                egui::Color32::from_gray(100),
+                ui.visuals().weak_text_color(),
             );
 
             // 7. Explanatory bottom legend
-            let legend_y = y_bottom + 38.0;
+            let legend_y = y_bottom + 30.0;
             let legend_text = if !state.auto_cut {
-                "💡 Chain Mode: Continuous printing with 0 mm waste between labels. Click 'Feed & Cut' in the top toolbar to cut the tape."
+                "💡 Chain Mode: Continuous printing with 0 mm gap between labels. Click 'Feed & Cut' to cut."
             } else if state.precut {
-                "💡 Pre-Cut Mode: Cuts ~25 mm leader scrap before printing for symmetrical borders. (2 cuts total: Pre-Cut + Final Cut)"
+                "💡 Pre-Cut Mode: Cuts before and after label for symmetrical tape margins."
             } else {
-                "💡 Standard Auto-Cut: Prints label with hardware lead and cuts once at the end. No scrap snippet is cut off."
+                "💡 Standard Auto-Cut: Prints label and cuts once at the end. Zero scrap snippets."
             };
             painter.text(
                 egui::pos2(center.x, legend_y),
                 egui::Align2::CENTER_TOP,
                 legend_text,
                 egui::FontId::proportional(11.0),
-                egui::Color32::from_gray(90),
+                ui.visuals().weak_text_color(),
             );
 
-            // Allocate the space so the panel is not empty
             ui.allocate_rect(canvas_rect, egui::Sense::hover());
         }
         None => {
-            // No preview available
             let center = canvas_rect.center();
             ui.painter().text(
                 center,
                 egui::Align2::CENTER_CENTER,
-                "Add elements to preview",
-                egui::FontId::proportional(18.0),
-                egui::Color32::from_gray(100),
+                "Add elements to design your label",
+                egui::FontId::proportional(16.0),
+                ui.visuals().weak_text_color(),
             );
             ui.allocate_rect(canvas_rect, egui::Sense::hover());
         }
@@ -348,16 +272,16 @@ fn draw_cut_marker(
     is_active_cut: bool,
 ) {
     let color = if is_active_cut {
-        egui::Color32::from_rgb(220, 45, 45) // Vivid Red for CUT
+        egui::Color32::from_rgb(230, 50, 50) // Vivid Red for CUT
     } else {
-        egui::Color32::from_gray(140) // Neutral gray for Previous Cut
+        egui::Color32::from_gray(140)
     };
     let stroke = egui::Stroke::new(2.0, color);
 
-    draw_dashed_v_line(painter, x, y_top - 20.0, y_bottom + 20.0, stroke, 5.0, 3.0);
+    draw_dashed_v_line(painter, x, y_top - 16.0, y_bottom + 16.0, stroke, 5.0, 3.0);
 
     let font_id = egui::FontId::proportional(11.0);
-    let badge_pos = egui::pos2(x, y_top - 22.0);
+    let badge_pos = egui::pos2(x, y_top - 18.0);
     let text_rect = painter.text(
         badge_pos,
         egui::Align2::CENTER_BOTTOM,
@@ -383,13 +307,13 @@ fn draw_no_cut_marker(
     y_bottom: f32,
     label: &str,
 ) {
-    let color = egui::Color32::from_rgb(40, 120, 200); // Blue
+    let color = egui::Color32::from_rgb(50, 130, 220); // Blue
     let stroke = egui::Stroke::new(1.0, color);
 
-    draw_dashed_v_line(painter, x, y_top - 12.0, y_bottom + 12.0, stroke, 3.0, 3.0);
+    draw_dashed_v_line(painter, x, y_top - 10.0, y_bottom + 10.0, stroke, 3.0, 3.0);
 
     let font_id = egui::FontId::proportional(10.0);
-    let badge_pos = egui::pos2(x, y_top - 16.0);
+    let badge_pos = egui::pos2(x, y_top - 14.0);
     let text_rect = painter.text(
         badge_pos,
         egui::Align2::CENTER_BOTTOM,
@@ -414,14 +338,14 @@ fn draw_continuous_indicator(
     y_top: f32,
     y_bottom: f32,
 ) {
-    let color = egui::Color32::from_rgb(0, 150, 80); // Green
+    let color = egui::Color32::from_rgb(0, 160, 90); // Green
     let font_id = egui::FontId::proportional(11.0);
-    let label = "➔ CONTINUOUS (NO CUT) ➔";
+    let label = "➔ CONTINUOUS (NO CUT)";
 
     let stroke = egui::Stroke::new(2.0, color);
     draw_dashed_v_line(painter, x, y_top - 16.0, y_bottom + 16.0, stroke, 4.0, 3.0);
 
-    let badge_pos = egui::pos2(x + 10.0, y_top - 20.0);
+    let badge_pos = egui::pos2(x + 8.0, y_top - 18.0);
     let text_rect = painter.text(
         badge_pos,
         egui::Align2::LEFT_BOTTOM,
@@ -460,25 +384,7 @@ fn draw_dimension(
         egui::pos2((x_start + x_end) / 2.0, y - 4.0),
         egui::Align2::CENTER_BOTTOM,
         text,
-        egui::FontId::proportional(10.0),
+        egui::FontId::proportional(11.0),
         color,
     );
-}
-
-fn draw_stripes(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    color: egui::Color32,
-) {
-    let stroke = egui::Stroke::new(1.0, color);
-    let step = 10.0;
-    let mut x = rect.min.x - rect.height();
-    while x < rect.max.x {
-        let p1 = egui::pos2(x.max(rect.min.x), rect.max.y);
-        let p2 = egui::pos2((x + rect.height()).min(rect.max.x), rect.min.y);
-        if p1.x < rect.max.x && p2.x > rect.min.x {
-            painter.line_segment([p1, p2], stroke);
-        }
-        x += step;
-    }
 }
