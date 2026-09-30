@@ -99,6 +99,20 @@ fn show_tape_section(ui: &mut egui::Ui, state: &mut AppState) {
                     }
                 }
             });
+
+        ui.add_space(4.0);
+        if ui.button("🏷 Change Tape / Cartridge...").clicked() {
+            state.show_setup_modal = true;
+        }
+
+        if let Some(total_m) = state.cartridge_total_length_m {
+            let remaining = (total_m - state.tape_printed_meters).max(0.0);
+            ui.label(
+                egui::RichText::new(format!("Cartridge: {:.2}m rem / {:.1}m", remaining, total_m))
+                    .small()
+                    .color(ui.visuals().weak_text_color()),
+            );
+        }
     });
 }
 
@@ -160,10 +174,33 @@ fn show_print_options(ui: &mut egui::Ui, state: &mut AppState) {
             state.mark_dirty();
         }
 
+        if state.cut_mode == CutMarginMode::CenteredFull {
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.label("Safety Margin (mm):");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut state.centered_margin_mm)
+                            .range(5.0..=50.0)
+                            .speed(0.5),
+                    )
+                    .changed()
+                {
+                    state.mark_dirty();
+                }
+            })
+            .response
+            .on_hover_text(
+                "Symmetrical safety margin added before and after text.\n\
+                 Prevents the first letters on the left from being cut off\n\
+                 and centers the text with matching margins.",
+            );
+        }
+
         if state.cut_mode == CutMarginMode::PretrimCut {
             ui.add_space(2.0);
             ui.horizontal(|ui| {
-                ui.label("Margin (mm):");
+                ui.label("Safe Margin (mm):");
                 if ui
                     .add(
                         egui::DragValue::new(&mut state.small_margin_mm)
@@ -174,7 +211,11 @@ fn show_print_options(ui: &mut egui::Ui, state: &mut AppState) {
                 {
                     state.mark_dirty();
                 }
-            });
+            })
+            .response
+            .on_hover_text(
+                "Safe margin added before and after text to prevent letters from being cut off.",
+            );
         }
 
         ui.add_space(4.0);

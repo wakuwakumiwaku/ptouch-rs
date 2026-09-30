@@ -14,8 +14,16 @@ pub fn show_status_bar(ui: &mut egui::Ui, state: &AppState) {
 
         ui.separator();
 
-        // Tape info
-        ui.label(format!("Tape: {} mm", state.tape_width_mm));
+        // Tape info & cartridge remaining
+        if let Some(total_m) = state.cartridge_total_length_m {
+            let remaining = (total_m - state.tape_printed_meters).max(0.0);
+            ui.label(format!(
+                "Tape: {} mm | Cartridge: {:.2}m rem / {:.1}m",
+                state.tape_width_mm, remaining, total_m
+            ));
+        } else {
+            ui.label(format!("Tape: {} mm", state.tape_width_mm));
+        }
 
         ui.separator();
 

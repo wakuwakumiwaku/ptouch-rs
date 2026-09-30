@@ -38,17 +38,18 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
 
             match state.cut_mode {
                 CutMarginMode::CenteredFull => {
-                    let total_tape_mm = lead_mm + content_mm + lead_mm;
+                    let margin_mm = state.centered_margin_mm;
+                    let total_tape_mm = margin_mm + content_mm + margin_mm;
                     ui.label(
                         egui::RichText::new(format!(
-                            "Label Length: {:.1} mm (Centered: 24.5mm + {:.1}mm + 24.5mm)",
-                            total_tape_mm, content_mm
+                            "Label Length: {:.1} mm (Centered: {:.1}mm + {:.1}mm + {:.1}mm)",
+                            total_tape_mm, margin_mm, content_mm, margin_mm
                         ))
                         .strong(),
                     );
                     ui.separator();
                     ui.label(
-                        egui::RichText::new("✂ Cuts: 1 (Final Cut Only • 0 Waste Scrap)")
+                        egui::RichText::new("✂ Cuts: 1 (Final Cut • Safe Margins • 0 Scrap)")
                             .color(egui::Color32::from_rgb(60, 140, 240)),
                     );
                 }
@@ -84,10 +85,39 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
 
     ui.separator();
 
-    // Canvas area: NO background rect drawn so there is NO black or grey background box.
-    // The only area shown is the tape that gets printed.
+    // Canvas area background: crisp white as requested
     let canvas_rect = ui.available_rect_before_wrap();
     let canvas_size = canvas_rect.size();
+
+    // Fill canvas background with white
+    ui.painter().rect_filled(canvas_rect, 0.0, egui::Color32::WHITE);
+
+    // Intuitive banner explaining the background vs the outlined label box
+    let info_text = "(this is the background, the label is in the outlined box)";
+    let banner_font = egui::FontId::proportional(11.5);
+    let banner_pos = egui::pos2(canvas_rect.center().x, canvas_rect.min.y + 10.0);
+    let text_rect = ui.painter().text(
+        banner_pos,
+        egui::Align2::CENTER_TOP,
+        info_text,
+        banner_font.clone(),
+        egui::Color32::TRANSPARENT,
+    );
+    let pill_rect = text_rect.expand2(egui::vec2(10.0, 3.0));
+    ui.painter().rect_filled(pill_rect, 4.0, egui::Color32::from_rgb(243, 246, 250));
+    ui.painter().rect_stroke(
+        pill_rect,
+        4.0,
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(210, 220, 235)),
+        egui::StrokeKind::Outside,
+    );
+    ui.painter().text(
+        banner_pos,
+        egui::Align2::CENTER_TOP,
+        info_text,
+        banner_font,
+        egui::Color32::from_rgb(85, 100, 120),
+    );
 
     match state.preview_texture {
         Some(ref texture) => {
@@ -102,7 +132,8 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
             // Total strip width in printer pixels (unscaled)
             let total_strip_w_px = match state.cut_mode {
                 CutMarginMode::CenteredFull => {
-                    lead_w_px + (content_w_px * copies as f32) + lead_w_px
+                    let margin_px = (state.centered_margin_mm * px_per_mm).round();
+                    margin_px + (content_w_px * copies as f32) + margin_px
                 }
                 CutMarginMode::PretrimCut => {
                     let margin_px = (state.small_margin_mm * px_per_mm).round();
@@ -139,14 +170,15 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
 
             let painter = ui.painter();
 
-            // 1. Draw tape shadow and physical tape body
+            // 1. Draw tape shadow and physical tape body in outlined box
             let shadow_rect = tape_rect.translate(egui::vec2(2.0, 3.0));
-            painter.rect_filled(shadow_rect, 3.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 45));
+            painter.rect_filled(shadow_rect, 4.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 35));
             painter.rect_filled(tape_rect, 3.0, egui::Color32::WHITE);
+            // Crisp, prominent outline for the printed label box
             painter.rect_stroke(
                 tape_rect,
                 3.0,
-                egui::Stroke::new(1.0, egui::Color32::from_gray(180)),
+                egui::Stroke::new(2.0, egui::Color32::from_rgb(40, 50, 70)),
                 egui::StrokeKind::Outside,
             );
 
@@ -176,30 +208,31 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
 
             match state.cut_mode {
                 CutMarginMode::CenteredFull => {
-                    let lead_w = lead_w_px * zoom;
+                    let margin_mm = state.centered_margin_mm;
+                    let margin_w = (margin_mm * px_per_mm).round() * zoom;
 
-                    // Leading 24.5 mm margin
+                    // Leading safety margin
                     let lead_rect = egui::Rect::from_min_max(
                         egui::pos2(cur_x, y_top),
-                        egui::pos2(cur_x + lead_w, y_bottom),
+                        egui::pos2(cur_x + margin_w, y_bottom),
                     );
                     painter.rect_filled(lead_rect, 0.0, egui::Color32::from_gray(248));
                     painter.text(
                         lead_rect.center(),
                         egui::Align2::CENTER_CENTER,
-                        "24.5 mm Lead Margin",
+                        format!("{:.1} mm Safety Margin", margin_mm),
                         egui::FontId::proportional(11.0),
                         egui::Color32::from_gray(130),
                     );
                     draw_dimension(
                         painter,
                         cur_x,
-                        cur_x + lead_w,
+                        cur_x + margin_w,
                         ruler_y,
-                        &format!("{:.1} mm (Lead)", lead_mm),
+                        &format!("{:.1} mm (Margin)", margin_mm),
                         egui::Color32::from_rgb(60, 140, 220),
                     );
-                    cur_x += lead_w;
+                    cur_x += margin_w;
 
                     // Content copies (centered)
                     for copy_idx in 0..copies {
@@ -229,28 +262,28 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                         }
                     }
 
-                    // Trailing 24.5 mm margin
+                    // Trailing safety margin
                     let trail_rect = egui::Rect::from_min_max(
                         egui::pos2(cur_x, y_top),
-                        egui::pos2(cur_x + lead_w, y_bottom),
+                        egui::pos2(cur_x + margin_w, y_bottom),
                     );
                     painter.rect_filled(trail_rect, 0.0, egui::Color32::from_gray(248));
                     painter.text(
                         trail_rect.center(),
                         egui::Align2::CENTER_CENTER,
-                        "24.5 mm Trail Margin",
+                        format!("{:.1} mm Safety Margin", margin_mm),
                         egui::FontId::proportional(11.0),
                         egui::Color32::from_gray(130),
                     );
                     draw_dimension(
                         painter,
                         cur_x,
-                        cur_x + lead_w,
+                        cur_x + margin_w,
                         ruler_y,
-                        &format!("{:.1} mm (Trail)", lead_mm),
+                        &format!("{:.1} mm (Margin)", margin_mm),
                         egui::Color32::from_rgb(60, 140, 220),
                     );
-                    cur_x += lead_w;
+                    cur_x += margin_w;
 
                     // Single Final Cut at the end
                     draw_cut_marker(painter, cur_x, y_top, y_bottom, "✂ FINAL CUT", true);
@@ -373,14 +406,14 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                 egui::Align2::RIGHT_CENTER,
                 format!("{} mm", state.tape_width_mm),
                 egui::FontId::proportional(11.0),
-                ui.visuals().weak_text_color(),
+                egui::Color32::from_rgb(60, 75, 95),
             );
 
             // Explanatory bottom legend
             let legend_y = y_bottom + 30.0;
             let legend_text = match state.cut_mode {
                 CutMarginMode::CenteredFull => {
-                    "💡 Centered Full (Large Margin): Hardware lead (~24.5mm) is matched by trailing margin. Text is centered. Exactly 1 cut at end."
+                    "💡 Centered Full: Protected with symmetrical safety margins before and after text. Exactly 1 cut at end."
                 }
                 CutMarginMode::PretrimCut => {
                     "💡 Pretrim Cut (Small Margin): Pre-trims 24.5mm scrap snippet, then prints compact label with safe margins. Exactly 2 cuts."
@@ -394,7 +427,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                 egui::Align2::CENTER_TOP,
                 legend_text,
                 egui::FontId::proportional(11.0),
-                ui.visuals().weak_text_color(),
+                egui::Color32::from_rgb(70, 80, 100),
             );
 
             ui.allocate_rect(canvas_rect, egui::Sense::hover());
@@ -404,9 +437,9 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
             ui.painter().text(
                 center,
                 egui::Align2::CENTER_CENTER,
-                "Add elements to design your label",
-                egui::FontId::proportional(16.0),
-                ui.visuals().weak_text_color(),
+                "Add elements to design your label\n(this is the background, the label will appear in the outlined box)",
+                egui::FontId::proportional(15.0),
+                egui::Color32::from_rgb(100, 115, 135),
             );
             ui.allocate_rect(canvas_rect, egui::Sense::hover());
         }

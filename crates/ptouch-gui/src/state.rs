@@ -145,8 +145,18 @@ pub struct AppState {
     pub font_search: String,
     /// Cut & margin strategy (CenteredFull, PretrimCut, ChainPrint).
     pub cut_mode: CutMarginMode,
+    /// Symmetrical safe margin for CenteredFull in millimeters (default: 15.0 mm).
+    pub centered_margin_mm: f32,
     /// Safe margin for PretrimCut in millimeters (default: 3.0 mm).
     pub small_margin_mm: f32,
+    /// Whether the initial tape & cartridge setup modal is open.
+    pub show_setup_modal: bool,
+    /// Total length of current tape cartridge in meters (optional, e.g. 8.0).
+    pub cartridge_total_length_m: Option<f32>,
+    /// Text buffer for cartridge length in the setup modal.
+    pub cartridge_length_input: String,
+    /// Cumulative meters of tape printed in this session.
+    pub tape_printed_meters: f32,
     /// Auto-cut after printing. When false, chain print mode (no cut).
     pub auto_cut: bool,
     /// Trim ~25mm hardware leader scrap before printing. Default false.
@@ -200,7 +210,12 @@ impl Default for AppState {
             rotation_input: String::new(),
             font_search: String::new(),
             cut_mode: CutMarginMode::CenteredFull,
+            centered_margin_mm: 15.0,
             small_margin_mm: 3.0,
+            show_setup_modal: true,
+            cartridge_total_length_m: None,
+            cartridge_length_input: String::new(),
+            tape_printed_meters: 0.0,
             auto_cut: true,
             precut: false,
             copies: 1,

@@ -222,6 +222,11 @@ impl eframe::App for PtouchApp {
             panels::canvas::show_canvas(ui, &mut self.state);
         });
 
+        // Tape & cartridge setup modal (appears on startup or when invoked)
+        if self.state.show_setup_modal {
+            panels::tape_modal::show_tape_modal(&ctx, &mut self.state);
+        }
+
         // Re-render preview if dirty
         if self.state.needs_rerender {
             self.update_preview(&ctx);

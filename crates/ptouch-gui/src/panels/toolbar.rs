@@ -93,11 +93,14 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
 
             let (raster_lines, chain_print, precut) = match state.cut_mode {
                 crate::state::CutMarginMode::CenteredFull => {
-                    // Physical hardware lead is ~24.5 mm ahead of the print head.
-                    // To center the text on the label, add matching ~24.5 mm trailing margin.
-                    let trailing_lines = (24.5 * px_per_mm).round() as usize;
-                    let mut lines = raw_lines;
-                    lines.extend(std::iter::repeat(blank_line).take(trailing_lines));
+                    // Symmetrical safety margins: add safe blank lines BEFORE the text
+                    // (preventing the first letters from getting cut off)
+                    // and matching trailing lines AFTER the text so it's perfectly centered!
+                    let margin_lines = (state.centered_margin_mm * px_per_mm).round() as usize;
+                    let mut lines = Vec::with_capacity(margin_lines * 2 + raw_lines.len());
+                    lines.extend(std::iter::repeat(blank_line.clone()).take(margin_lines));
+                    lines.extend(raw_lines);
+                    lines.extend(std::iter::repeat(blank_line).take(margin_lines));
                     (lines, false, false)
                 }
                 crate::state::CutMarginMode::PretrimCut => {
@@ -119,6 +122,10 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
                     (lines, true, false)
                 }
             };
+
+            // Track cumulative tape consumption
+            let total_job_mm = (raster_lines.len() as f32 / px_per_mm) * copies as f32;
+            state.tape_printed_meters += total_job_mm / 1000.0;
 
             if let Some(ref tx) = state.printer_cmd_tx {
                 let _ = tx.send(PrinterCommand::Print {
@@ -149,6 +156,16 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
             let _ = tx.send(PrinterCommand::FeedAndCut(state.printer_target.clone()));
             state.operation_in_progress = true;
             state.status_message = "Feeding & cutting...".to_string();
+        }
+
+        let tape_btn_label = if let Some(total_m) = state.cartridge_total_length_m {
+            let rem = (total_m - state.tape_printed_meters).max(0.0);
+            format!("🏷 Tape: {} mm ({:.1}m rem)", state.tape_width_mm, rem)
+        } else {
+            format!("🏷 Tape: {} mm", state.tape_width_mm)
+        };
+        if ui.button(tape_btn_label).clicked() {
+            state.show_setup_modal = true;
         }
 
         if ui.button("Export Image").clicked() {
