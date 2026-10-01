@@ -91,6 +91,17 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
         }
 
         if ui
+            .add_enabled(in_designer, egui::Button::new("Add QR Code"))
+            .clicked()
+        {
+            let element = LabelElement::qr_from_content("https://example.com");
+            state.elements.push(element);
+            state.selected_element = Some(state.elements.len() - 1);
+            state.mark_dirty();
+            info!("Added QR code element");
+        }
+
+        if ui
             .add_enabled(in_designer, egui::Button::new("Cut Mark"))
             .clicked()
         {

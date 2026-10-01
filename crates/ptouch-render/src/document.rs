@@ -184,7 +184,7 @@ impl LabelDocument {
         Ok(doc)
     }
 
-    /// Decode every image element's embedded bytes into its render cache.
+    /// Decode every image or QR element into its render cache.
     ///
     /// Returns an error if any embedded image cannot be decoded, so a corrupt
     /// layout fails loudly rather than rendering blank.
@@ -202,32 +202,60 @@ impl LabelDocument {
                 )?;
                 *bitmap = Some(decoded);
             }
+            if let LabelElement::QrCode {
+                content,
+                bitmap,
+                target_height,
+                ..
+            } = element
+                && bitmap.is_none()
+                && !content.trim().is_empty()
+            {
+                let h = target_height.unwrap_or(128);
+                *bitmap = crate::qr::render_qr_code(content, h).ok();
+            }
         }
         Ok(())
     }
 
-    /// Collect the unique `{{name}}` placeholder names used in text elements.
+    /// Collect the unique `{{name}}` placeholder names used in text and QR elements.
     ///
     /// The result is sorted for stable display and de-duplication.
     pub fn placeholders(&self) -> Vec<String> {
         let mut names = BTreeSet::new();
         for element in &self.elements {
-            if let LabelElement::Text { content, .. } = element {
-                collect_placeholder_names(content, &mut names);
+            match element {
+                LabelElement::Text { content, .. } | LabelElement::QrCode { content, .. } => {
+                    collect_placeholder_names(content, &mut names);
+                }
+                _ => {}
             }
         }
         names.into_iter().collect()
     }
 
-    /// Replace `{{name}}` placeholders in all text elements using `values`.
+    /// Replace `{{name}}` placeholders in all text and QR elements using `values`.
     ///
     /// A placeholder with no matching value is replaced with an empty string;
     /// callers that want to reject missing values should check
     /// [`LabelDocument::placeholders`] against the provided keys first.
     pub fn apply_values(&mut self, values: &BTreeMap<String, String>) {
         for element in &mut self.elements {
-            if let LabelElement::Text { content, .. } = element {
-                *content = substitute_placeholders(content, |name| values.get(name).cloned());
+            match element {
+                LabelElement::Text { content, .. } => {
+                    *content = substitute_placeholders(content, |name| values.get(name).cloned());
+                }
+                LabelElement::QrCode {
+                    content,
+                    bitmap,
+                    target_height,
+                    ..
+                } => {
+                    *content = substitute_placeholders(content, |name| values.get(name).cloned());
+                    let h = target_height.unwrap_or(128);
+                    *bitmap = crate::qr::render_qr_code(content, h).ok();
+                }
+                _ => {}
             }
         }
     }
@@ -339,6 +367,28 @@ pub enum LabelElement {
         /// Padding width in pixels.
         pixels: u32,
     },
+    /// A QR code generated from URL or text.
+    QrCode {
+        /// Content encoded in the QR code (URL, text, WiFi, etc.).
+        content: String,
+        /// Decoded render cache; rebuilt from `content`, never serialized.
+        #[serde(skip)]
+        bitmap: Option<LabelBitmap>,
+        /// Rotation angle in degrees (clockwise). 0.0 = horizontal.
+        #[serde(default)]
+        rotation: f32,
+        /// Target height in pixels. `None` = auto (fit to tape height).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        target_height: Option<u32>,
+        /// Mirror this element left-right (horizontal). Applied to the element's
+        /// own bitmap, before it is composed into the label.
+        #[serde(default)]
+        flip_h: bool,
+        /// Mirror this element top-bottom (vertical). Applied to the element's
+        /// own bitmap, before it is composed into the label.
+        #[serde(default)]
+        flip_v: bool,
+    },
 }
 
 impl LabelElement {
@@ -361,9 +411,30 @@ impl LabelElement {
         }
     }
 
+    /// Build a QR code element from text/URL, generating a render cache eagerly.
+    pub fn qr_from_content(content: impl Into<String>) -> Self {
+        let content = content.into();
+        let bitmap = crate::qr::render_qr_code(&content, 128).ok();
+        LabelElement::QrCode {
+            content,
+            bitmap,
+            rotation: 0.0,
+            target_height: None,
+            flip_h: false,
+            flip_v: false,
+        }
+    }
+
     /// Set the decoded render cache for an image element.
     pub fn set_image_bitmap(&mut self, decoded: Option<LabelBitmap>) {
         if let LabelElement::Image { bitmap, .. } = self {
+            *bitmap = decoded;
+        }
+    }
+
+    /// Set the decoded render cache for a QR code element.
+    pub fn set_qr_bitmap(&mut self, decoded: Option<LabelBitmap>) {
+        if let LabelElement::QrCode { bitmap, .. } = self {
             *bitmap = decoded;
         }
     }
@@ -389,6 +460,14 @@ impl LabelElement {
             }
             LabelElement::CutMark => "Cut Mark".to_string(),
             LabelElement::Padding { pixels } => format!("Padding: {} px", pixels),
+            LabelElement::QrCode { content, .. } => {
+                let preview: String = content.chars().take(20).collect();
+                if content.chars().count() > 20 {
+                    format!("QR: {}...", preview)
+                } else {
+                    format!("QR: {}", preview)
+                }
+            }
         }
     }
 }
@@ -460,6 +539,23 @@ pub fn render_elements(
             },
             LabelElement::CutMark => compose::cutmark(tape_width_px),
             LabelElement::Padding { pixels } => compose::padding(tape_width_px, *pixels),
+            LabelElement::QrCode {
+                content,
+                bitmap,
+                rotation,
+                target_height,
+                flip_h,
+                flip_v,
+            } => match render_qr_segment(
+                bitmap.as_ref(),
+                content,
+                *rotation,
+                *target_height,
+                tape_width_px,
+            ) {
+                Some(seg) => seg.mirrored(*flip_h, *flip_v),
+                None => continue,
+            },
         };
 
         result = Some(match result {
@@ -567,6 +663,28 @@ fn render_image_segment(
     } else {
         Some(bmp.fit_height(tape_width_px))
     }
+}
+
+/// Render a QR code element to a tape-height bitmap, or `None` to skip it.
+fn render_qr_segment(
+    _cached: Option<&LabelBitmap>,
+    content: &str,
+    rotation: f32,
+    target_height: Option<u32>,
+    tape_width_px: u32,
+) -> Option<LabelBitmap> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let desired_h = target_height.unwrap_or(tape_width_px).min(tape_width_px);
+    let mut qr_bmp = crate::qr::render_qr_code(trimmed, desired_h).ok()?;
+
+    if is_rotated(rotation) {
+        qr_bmp = qr_bmp.rotate(rotation);
+    }
+
+    Some(qr_bmp.fit_height(tape_width_px))
 }
 
 /// Returns true if the angle is not effectively a multiple of 360 degrees.
@@ -1102,5 +1220,77 @@ mod tests {
         let toml_str = doc.to_toml_string().unwrap();
         let parsed = LabelDocument::from_toml_str(&toml_str).unwrap();
         assert_eq!(parsed.margin_mm, Some(25.0));
+    }
+
+    #[test]
+    fn test_qrcode_element_serialization_and_rendering() {
+        let doc = LabelDocument {
+            version: DOCUMENT_VERSION,
+            tape_width_mm: 24,
+            dpi: 180,
+            font_name: "Inter".into(),
+            font_margin: 0,
+            flip_h: false,
+            flip_v: false,
+            margin_mm: None,
+            elements: vec![
+                LabelElement::qr_from_content("https://example.com"),
+                LabelElement::Text {
+                    content: "Scan Me".into(),
+                    font_size: None,
+                    align: TextAlign::Center,
+                    rotation: 0.0,
+                    flip_h: false,
+                    flip_v: false,
+                },
+            ],
+        };
+
+        // Test serialization round trip
+        let toml_str = doc.to_toml_string().expect("serialize doc with qr");
+        assert!(toml_str.contains("type = \"qr_code\""));
+        assert!(toml_str.contains("content = \"https://example.com\""));
+
+        let parsed = LabelDocument::from_toml_str(&toml_str).expect("deserialize doc with qr");
+        assert_eq!(parsed.elements.len(), 2);
+        assert_eq!(parsed.elements[0].display_name(), "QR: https://example.com");
+
+        // Test rendering
+        let mut renderer = TextRenderer::new();
+        let rendered = render_elements(&parsed.elements, 128, &parsed.font_name, 0, &mut renderer)
+            .expect("render")
+            .expect("not empty");
+        assert_eq!(rendered.height(), 128);
+        assert!(rendered.width() > 100);
+    }
+
+    #[test]
+    fn test_qrcode_placeholders_and_values() {
+        let mut doc = LabelDocument {
+            version: DOCUMENT_VERSION,
+            tape_width_mm: 24,
+            dpi: 180,
+            font_name: "Inter".into(),
+            font_margin: 0,
+            flip_h: false,
+            flip_v: false,
+            margin_mm: None,
+            elements: vec![LabelElement::qr_from_content(
+                "https://example.com/item/{{item_id}}",
+            )],
+        };
+
+        let placeholders = doc.placeholders();
+        assert_eq!(placeholders, vec!["item_id"]);
+
+        let mut values = BTreeMap::new();
+        values.insert("item_id".to_string(), "ABC-123".to_string());
+        doc.apply_values(&values);
+
+        if let LabelElement::QrCode { content, .. } = &doc.elements[0] {
+            assert_eq!(content, "https://example.com/item/ABC-123");
+        } else {
+            panic!("Expected QrCode element");
+        }
     }
 }

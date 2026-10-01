@@ -282,18 +282,49 @@ pub fn show_batch_panel(
                                         .font(egui::TextStyle::Heading)
                                         .hint_text("Label text..."),
                                 );
-                                    if resp.changed() {
-                                        item.title = content
-                                            .lines()
-                                            .next()
-                                            .unwrap_or("Label")
-                                            .trim()
-                                            .to_string();
-                                        item.dirty = true;
-                                        if is_active {
-                                            active_text_changed = true;
-                                        }
+                                if resp.changed() {
+                                    item.title = content
+                                        .lines()
+                                        .next()
+                                        .unwrap_or("Label")
+                                        .trim()
+                                        .to_string();
+                                    item.dirty = true;
+                                    if is_active {
+                                        active_text_changed = true;
                                     }
+                                }
+                                let has_qr = item.document.elements.iter().any(|el| matches!(el, ptouch_render::document::LabelElement::QrCode { .. }));
+                                if has_qr {
+                                    ui.label(
+                                        egui::RichText::new("📱+📝")
+                                            .small()
+                                            .color(egui::Color32::from_rgb(100, 116, 139)),
+                                    ).on_hover_text("This label contains both text and QR code");
+                                }
+                            } else if let Some(ptouch_render::document::LabelElement::QrCode {
+                                content,
+                                bitmap,
+                                target_height,
+                                ..
+                            }) = item.document.elements.iter_mut().find(|el| matches!(el, ptouch_render::document::LabelElement::QrCode { .. }))
+                            {
+                                ui.label(egui::RichText::new("📱 QR:").strong().size(13.0));
+                                let resp = ui.add(
+                                    egui::TextEdit::singleline(content)
+                                        .desired_width(240.0)
+                                        .font(egui::TextStyle::Monospace)
+                                        .hint_text("https://... or text"),
+                                );
+                                if resp.changed() {
+                                    let h = target_height.unwrap_or(item.document.tape_width_mm as u32 * 8);
+                                    *bitmap = ptouch_render::qr::render_qr_code(content, h).ok();
+                                    item.title = format!("QR: {}", content.trim());
+                                    item.dirty = true;
+                                    if is_active {
+                                        active_text_changed = true;
+                                    }
+                                }
                             } else {
                                 let resp = ui.add(
                                     egui::TextEdit::singleline(&mut item.title)
@@ -314,6 +345,20 @@ pub fn show_batch_panel(
                                             flip_h: false,
                                             flip_v: false,
                                         },
+                                    );
+                                    item.dirty = true;
+                                    if is_active {
+                                        active_text_changed = true;
+                                    }
+                                }
+                                if ui.small_button("➕ Add QR").clicked() {
+                                    let initial = if item.title.is_empty() {
+                                        "https://example.com"
+                                    } else {
+                                        &item.title
+                                    };
+                                    item.document.elements.push(
+                                        ptouch_render::document::LabelElement::qr_from_content(initial),
                                     );
                                     item.dirty = true;
                                     if is_active {

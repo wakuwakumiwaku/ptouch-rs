@@ -97,6 +97,27 @@ pub fn show_properties(ui: &mut egui::Ui, state: &mut AppState) {
         LabelElement::Padding { pixels } => {
             changed |= show_padding_properties(ui, pixels);
         }
+        LabelElement::QrCode {
+            content,
+            bitmap,
+            rotation,
+            target_height,
+            flip_h,
+            flip_v,
+        } => {
+            changed |= show_qr_properties(
+                ui,
+                QrProps {
+                    content,
+                    bitmap,
+                    target_height,
+                    rotation,
+                    flip_h,
+                    flip_v,
+                },
+                state,
+            );
+        }
     }
 
     if changed {
@@ -139,6 +160,16 @@ struct ImageProps<'a> {
     bitmap: &'a mut Option<ptouch_render::bitmap::LabelBitmap>,
     rotation: &'a mut f32,
     target_height: &'a mut Option<u32>,
+    flip_h: &'a mut bool,
+    flip_v: &'a mut bool,
+}
+
+/// Mutable references to a QR code element's editable fields.
+struct QrProps<'a> {
+    content: &'a mut String,
+    bitmap: &'a mut Option<ptouch_render::bitmap::LabelBitmap>,
+    target_height: &'a mut Option<u32>,
+    rotation: &'a mut f32,
     flip_h: &'a mut bool,
     flip_v: &'a mut bool,
 }
@@ -563,6 +594,137 @@ fn show_padding_properties(ui: &mut egui::Ui, pixels: &mut u32) -> bool {
             }
         }
     });
+
+    changed
+}
+
+/// Show properties for a QR code element. Returns true if changed.
+fn show_qr_properties(ui: &mut egui::Ui, props: QrProps, state: &mut AppState) -> bool {
+    let QrProps {
+        content,
+        bitmap,
+        target_height,
+        rotation,
+        flip_h,
+        flip_v,
+    } = props;
+    let mut changed = false;
+
+    ui.heading("QR Code");
+    ui.add_space(4.0);
+
+    ui.label("Content / URL:");
+    let resp = ui.add(
+        egui::TextEdit::multiline(content)
+            .desired_width(220.0)
+            .desired_rows(3)
+            .hint_text("Type URL or text to encode..."),
+    );
+    if resp.changed() {
+        let h = target_height.unwrap_or(state.tape_width_px);
+        *bitmap = ptouch_render::qr::render_qr_code(content, h).ok();
+        changed = true;
+    }
+
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.small("Presets:");
+        if ui.small_button("https://").clicked() {
+            *content = "https://".to_string();
+            let h = target_height.unwrap_or(state.tape_width_px);
+            *bitmap = ptouch_render::qr::render_qr_code(content, h).ok();
+            changed = true;
+        }
+        if ui.small_button("Wi-Fi").clicked() {
+            *content = "WIFI:S:MyNetwork;T:WPA;P:MyPassword;;".to_string();
+            let h = target_height.unwrap_or(state.tape_width_px);
+            *bitmap = ptouch_render::qr::render_qr_code(content, h).ok();
+            changed = true;
+        }
+        if ui.small_button("Asset Tag").clicked() {
+            *content = "ASSET-{{id}}".to_string();
+            let h = target_height.unwrap_or(state.tape_width_px);
+            *bitmap = ptouch_render::qr::render_qr_code(content, h).ok();
+            changed = true;
+        }
+    });
+
+    ui.add_space(4.0);
+    if let Some(bmp) = bitmap.as_ref() {
+        let dpi = if state.printer_dpi > 0 {
+            state.printer_dpi as f32
+        } else {
+            180.0
+        };
+        let mm = (bmp.width() as f32 / dpi) * 25.4;
+        ui.label(
+            egui::RichText::new(format!(
+                "Size: {} × {} px (~{:.1} mm)",
+                bmp.width(),
+                bmp.height(),
+                mm
+            ))
+            .small()
+            .color(egui::Color32::from_rgb(40, 100, 160)),
+        );
+    } else {
+        ui.label(
+            egui::RichText::new("⚠️ Invalid or empty QR content")
+                .small()
+                .color(egui::Color32::from_rgb(200, 50, 50)),
+        );
+    }
+
+    ui.add_space(6.0);
+    // Height control
+    ui.label("Size / Height:");
+    let is_auto_height = target_height.is_none();
+    let mut auto_h = is_auto_height;
+    if ui.checkbox(&mut auto_h, "Auto (Fit tape height)").changed() {
+        if auto_h {
+            *target_height = None;
+        } else {
+            *target_height = Some(state.tape_width_px);
+        }
+        let h = target_height.unwrap_or(state.tape_width_px);
+        *bitmap = ptouch_render::qr::render_qr_code(content, h).ok();
+        changed = true;
+    }
+
+    if let Some(h_val) = target_height.as_mut() {
+        ui.horizontal(|ui| {
+            ui.label("Height:");
+            if ui
+                .add(
+                    egui::DragValue::new(h_val)
+                        .range(16..=state.tape_width_px)
+                        .suffix(" px"),
+                )
+                .changed()
+            {
+                *bitmap = ptouch_render::qr::render_qr_code(content, *h_val).ok();
+                changed = true;
+            }
+        });
+    }
+
+    ui.add_space(6.0);
+    // Rotation
+    ui.label("Rotation:");
+    ui.horizontal(|ui| {
+        for &deg in &[0.0_f32, 90.0, 180.0, 270.0] {
+            if ui
+                .selectable_label((*rotation - deg).abs() < 0.5, format!("{}°", deg as i32))
+                .clicked()
+            {
+                *rotation = deg;
+                changed = true;
+            }
+        }
+    });
+
+    ui.add_space(4.0);
+    changed |= show_flip_controls(ui, flip_h, flip_v);
 
     changed
 }

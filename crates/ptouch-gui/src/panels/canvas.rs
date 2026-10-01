@@ -123,6 +123,19 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                 .color(egui::Color32::from_rgb(30, 41, 59)),
         );
 
+        let selected_qr_idx = match state.selected_element {
+            Some(idx)
+                if idx < state.elements.len()
+                    && matches!(
+                        state.elements[idx],
+                        crate::state::LabelElement::QrCode { .. }
+                    ) =>
+            {
+                Some(idx)
+            }
+            _ => None,
+        };
+
         let target_text_idx = match state.selected_element {
             Some(idx)
                 if idx < state.elements.len()
@@ -136,7 +149,46 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                 .position(|el| matches!(el, crate::state::LabelElement::Text { .. })),
         };
 
-        if let Some(idx) = target_text_idx {
+        if let Some(idx) = selected_qr_idx {
+            ui.label(
+                egui::RichText::new("📱 QR:")
+                    .strong()
+                    .color(egui::Color32::from_rgb(30, 41, 59)),
+            );
+            if let crate::state::LabelElement::QrCode {
+                ref mut content,
+                ref mut bitmap,
+                target_height,
+                ..
+            } = state.elements[idx]
+            {
+                let resp = ui.add(
+                    egui::TextEdit::singleline(content)
+                        .desired_width(260.0)
+                        .hint_text("Type URL or QR content..."),
+                );
+                if state.request_text_focus {
+                    resp.request_focus();
+                    state.request_text_focus = false;
+                }
+                if resp.changed() {
+                    let h = target_height.unwrap_or(state.tape_width_px);
+                    *bitmap = ptouch_render::qr::render_qr_code(content, h).ok();
+                    state.selected_element = Some(idx);
+                    state.mark_dirty();
+                }
+            }
+            if state.elements.len() > 1 {
+                ui.small(
+                    egui::RichText::new(format!(
+                        "(Element {} of {})",
+                        idx + 1,
+                        state.elements.len()
+                    ))
+                    .color(egui::Color32::from_rgb(100, 110, 120)),
+                );
+            }
+        } else if let Some(idx) = target_text_idx {
             if let crate::state::LabelElement::Text {
                 ref mut content, ..
             } = state.elements[idx]
@@ -167,7 +219,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
             }
         } else {
             ui.label(
-                egui::RichText::new("(No text on this label)")
+                egui::RichText::new("(No text or QR on this label)")
                     .italics()
                     .color(egui::Color32::GRAY),
             );
@@ -180,6 +232,15 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                     flip_h: false,
                     flip_v: false,
                 });
+                state.selected_element = Some(state.elements.len() - 1);
+                state.mark_dirty();
+            }
+            if ui.button("📱 Add QR Code").clicked() {
+                state
+                    .elements
+                    .push(crate::state::LabelElement::qr_from_content(
+                        "https://example.com",
+                    ));
                 state.selected_element = Some(state.elements.len() - 1);
                 state.mark_dirty();
             }

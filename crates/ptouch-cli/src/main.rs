@@ -96,6 +96,10 @@ struct PrintArgs {
     #[arg(short = 'i', long)]
     image: Option<String>,
 
+    /// Print a QR code (URL or text)
+    #[arg(short = 'q', long, value_name = "CONTENT")]
+    qr: Option<String>,
+
     /// Binarization mode for images
     #[arg(long, value_enum, default_value = "auto")]
     binarize: BinarizeArg,
@@ -384,7 +388,7 @@ fn main() {
 /// Ad-hoc content flags overridden when `--layout` is set. Keep in sync with
 /// `PrintArgs`; the `content_flag_ids_resolve` test guards against renames.
 const CONTENT_FLAG_IDS: &[&str] = &[
-    "text", "image", "font", "size", "align", "margin", "cut", "pad", "flip_h", "flip_v",
+    "text", "image", "qr", "font", "size", "align", "margin", "cut", "pad", "flip_h", "flip_v",
 ];
 
 /// Return the display names of content flags the user explicitly passed on the
@@ -650,8 +654,8 @@ fn execute_print(args: &PrintArgs, ignored: &[String]) -> Result<(), Box<dyn std
     }
 
     // Validate arguments
-    if args.text.is_empty() && args.image.is_none() {
-        eprintln!("Error: nothing to print (provide text, --image, or --layout)");
+    if args.text.is_empty() && args.image.is_none() && args.qr.is_none() {
+        eprintln!("Error: nothing to print (provide text, --image, --qr, or --layout)");
         process::exit(1);
     }
 
@@ -970,6 +974,13 @@ fn build_label(
         };
         let img_bitmap = image_loader::load_image(Path::new(img_path), &options)?;
         result = Some(append_bitmap(result, img_bitmap));
+    }
+
+    // Generate and append QR code if provided
+    if let Some(ref qr_content) = args.qr {
+        debug!("Generating QR code: {}", qr_content);
+        let qr_bitmap = ptouch_render::qr::render_qr_code(qr_content, print_width)?;
+        result = Some(append_bitmap(result, qr_bitmap));
     }
 
     // Add cut mark if requested
