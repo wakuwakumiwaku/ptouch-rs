@@ -335,34 +335,50 @@ impl AppState {
     /// Ensure `batch_items` has at least one item initialized.
     pub fn ensure_batch_initialized(&mut self) {
         if self.batch_items.is_empty() {
-            if self.elements.is_empty() {
-                self.elements.push(LabelElement::Text {
-                    content: "Label 1".to_string(),
-                    font_size: None,
-                    align: ptouch_render::text::TextAlign::Center,
-                    rotation: 0.0,
+            let test_items = [
+                ("Ä Ö Ü ä ö ü ß • € 24,50", 2, "DINish"),
+                ("ACHTUNG!\nHochspannung 230V", 1, "Frutiger"),
+                ("SKIP ME (0 COPIES)", 0, "Inter"),
+                ("é è ê ç ñ ¿ ¡ ™ ® ©", 1, "Inter"),
+            ];
+
+            for (text, copies, font) in test_items {
+                let doc = ptouch_render::document::LabelDocument {
+                    version: ptouch_render::document::DOCUMENT_VERSION,
+                    tape_width_mm: self.tape_width_mm,
+                    dpi: self.printer_dpi,
+                    font_name: font.to_string(),
+                    font_margin: 0,
                     flip_h: false,
                     flip_v: false,
+                    elements: vec![LabelElement::Text {
+                        content: text.to_string(),
+                        font_size: None,
+                        align: ptouch_render::text::TextAlign::Center,
+                        rotation: 0.0,
+                        flip_h: false,
+                        flip_v: false,
+                    }],
+                };
+                let title = text.lines().next().unwrap_or("Label").to_string();
+                self.batch_items.push(BatchItem {
+                    id: self.next_batch_item_id,
+                    title,
+                    copies,
+                    document: doc,
+                    preview_bitmap: None,
+                    preview_texture: None,
+                    dirty: true,
                 });
-                self.selected_element = Some(0);
-                self.mark_dirty();
+                self.next_batch_item_id += 1;
             }
-            let doc = self.create_document_from_state();
-            let title = self.derive_label_title();
-            self.batch_items.push(BatchItem {
-                id: self.next_batch_item_id,
-                title,
-                copies: 1,
-                document: doc,
-                preview_bitmap: self.preview_bitmap.clone(),
-                preview_texture: self.preview_texture.clone(),
-                dirty: false,
-            });
-            self.next_batch_item_id += 1;
+
             self.active_batch_index = 0;
-            if self.selected_element.is_none() && !self.elements.is_empty() {
-                self.selected_element = Some(0);
-            }
+            self.elements = self.batch_items[0].document.elements.clone();
+            self.font_name = self.batch_items[0].document.font_name.clone();
+            self.copies = self.batch_items[0].copies.max(1);
+            self.selected_element = Some(0);
+            self.mark_dirty();
         }
     }
 
