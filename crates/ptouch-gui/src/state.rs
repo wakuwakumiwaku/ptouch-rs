@@ -230,6 +230,8 @@ pub struct AppState {
     pub show_generator_modal: bool,
     /// Flag signaling cancellation of an active print operation.
     pub cancel_flag: Arc<AtomicBool>,
+    /// Flag requesting keyboard focus on the primary text edit field.
+    pub request_text_focus: bool,
 }
 
 impl Default for AppState {
@@ -279,6 +281,7 @@ impl Default for AppState {
             next_batch_item_id: 1,
             show_generator_modal: false,
             cancel_flag: Arc::new(AtomicBool::new(false)),
+            request_text_focus: false,
         }
     }
 }

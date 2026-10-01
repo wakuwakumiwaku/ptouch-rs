@@ -146,6 +146,10 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                         .desired_width(260.0)
                         .hint_text("Type label text here..."),
                 );
+                if state.request_text_focus {
+                    resp.request_focus();
+                    state.request_text_focus = false;
+                }
                 if resp.changed() {
                     state.selected_element = Some(idx);
                     state.mark_dirty();
@@ -627,7 +631,38 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                 egui::Color32::from_rgb(70, 80, 100),
             );
 
-            ui.allocate_rect(canvas_rect, egui::Sense::hover());
+            let tape_resp = ui.interact(
+                tape_rect,
+                ui.id().with("tape_canvas_card"),
+                egui::Sense::click(),
+            );
+            if tape_resp.double_clicked() {
+                if let Some(pos) = state
+                    .elements
+                    .iter()
+                    .position(|el| matches!(el, crate::state::LabelElement::Text { .. }))
+                {
+                    state.selected_element = Some(pos);
+                }
+                state.request_text_focus = true;
+                ui.ctx().request_repaint();
+            }
+            tape_resp
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text("Double-click label to edit text");
+
+            let canvas_resp = ui.allocate_rect(canvas_rect, egui::Sense::click());
+            if canvas_resp.double_clicked() {
+                if let Some(pos) = state
+                    .elements
+                    .iter()
+                    .position(|el| matches!(el, crate::state::LabelElement::Text { .. }))
+                {
+                    state.selected_element = Some(pos);
+                }
+                state.request_text_focus = true;
+                ui.ctx().request_repaint();
+            }
         }
         None => {
             let center = canvas_rect.center();

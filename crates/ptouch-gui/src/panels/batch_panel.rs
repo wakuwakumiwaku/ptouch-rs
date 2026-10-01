@@ -353,7 +353,7 @@ pub fn show_batch_panel(
                                 ui.add_space(4.0);
 
                                 // White tape preview container
-                                egui::Frame::new()
+                                let preview_frame_resp = egui::Frame::new()
                                     .fill(egui::Color32::WHITE)
                                     .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(180, 185, 195)))
                                     .corner_radius(4.0)
@@ -379,6 +379,18 @@ pub fn show_batch_panel(
                                             );
                                         }
                                     });
+
+                                let preview_interact = ui.interact(
+                                    preview_frame_resp.response.rect,
+                                    ui.id().with(("batch_preview_card", idx)),
+                                    egui::Sense::click(),
+                                );
+                                if preview_interact.double_clicked() {
+                                    to_edit = Some(idx);
+                                }
+                                preview_interact
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                    .on_hover_text("Double-click to open and edit in Designer");
 
                                 ui.add_space(2.0);
                                 ui.label(
@@ -502,6 +514,7 @@ pub fn show_batch_panel(
             if let Some(idx) = to_edit {
                 state.switch_active_batch(idx);
                 state.view_mode = ViewMode::Designer;
+                state.request_text_focus = true;
             }
 
             ui.add_space(16.0);

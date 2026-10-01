@@ -178,6 +178,10 @@ fn show_text_properties(ui: &mut egui::Ui, props: TextProps, state: &mut AppStat
             .desired_width(f32::INFINITY)
             .desired_rows(4),
     );
+    if state.request_text_focus {
+        response.request_focus();
+        state.request_text_focus = false;
+    }
     if response.changed() {
         changed = true;
     }
