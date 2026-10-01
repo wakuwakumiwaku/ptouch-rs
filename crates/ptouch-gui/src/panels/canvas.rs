@@ -17,6 +17,17 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
 
     state.ensure_batch_initialized();
 
+    // Arrow keys navigation between batch labels when not actively editing text
+    if !ui.ctx().egui_wants_keyboard_input() {
+        if ui.input(|i| i.key_pressed(egui::Key::ArrowLeft)) && state.active_batch_index > 0 {
+            state.switch_active_batch(state.active_batch_index - 1);
+        } else if ui.input(|i| i.key_pressed(egui::Key::ArrowRight))
+            && state.active_batch_index + 1 < state.batch_items.len()
+        {
+            state.switch_active_batch(state.active_batch_index + 1);
+        }
+    }
+
     // Multi-label batch navigation bar
     ui.horizontal(|ui| {
         ui.label(
@@ -30,6 +41,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
 
         if ui
             .add_enabled(cur_idx > 0, egui::Button::new("◀ Prev"))
+            .on_hover_text("Previous label (Left Arrow ←)")
             .clicked()
         {
             state.switch_active_batch(cur_idx - 1);
@@ -39,6 +51,7 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
 
         if ui
             .add_enabled(cur_idx + 1 < total_items, egui::Button::new("Next ▶"))
+            .on_hover_text("Next label (Right Arrow →)")
             .clicked()
         {
             state.switch_active_batch(cur_idx + 1);

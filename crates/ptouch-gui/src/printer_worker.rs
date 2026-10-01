@@ -338,6 +338,16 @@ fn print_usb_batch(
             let _ = dev.close();
             return Err("Batch print cancelled by user".to_string());
         }
+
+        let _ = tx.send(PrinterEvent {
+            target: Some(target.clone()),
+            response: PrinterResponse::BatchProgress {
+                current: (i + 1) as u32,
+                total: total as u32,
+            },
+        });
+        ctx.request_repaint();
+
         let is_first = i == 0;
         let is_last = i == total - 1;
         let precut = if cut_each {
@@ -348,14 +358,48 @@ fn print_usb_batch(
         let chain = if cut_each { false } else { !is_last };
         dev.print_raster(label_lines, chain, precut, quality)
             .map_err(|e| format!("Print error on label {}/{}: {}", i + 1, total, e))?;
-        let _ = tx.send(PrinterEvent {
-            target: Some(target.clone()),
-            response: PrinterResponse::BatchProgress {
-                current: (i + 1) as u32,
-                total: total as u32,
-            },
-        });
-        ctx.request_repaint();
+
+        if cut_each && !is_last {
+            // Mechanical feed and cut on PT-D600 takes ~1.8 to 2.0 seconds.
+            // Do not send USB commands while the physical cutter blade is cycling!
+            let sleep_deadline = std::time::Instant::now() + Duration::from_millis(2000);
+            while std::time::Instant::now() < sleep_deadline {
+                if cancel_flag.load(Ordering::SeqCst) {
+                    let _ = dev.close();
+                    return Err("Batch print cancelled by user".to_string());
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+
+            // Flush stale status and re-initialize the device session for the next label job
+            let mut reinitialized = false;
+            for _ in 0..5 {
+                if cancel_flag.load(Ordering::SeqCst) {
+                    let _ = dev.close();
+                    return Err("Batch print cancelled by user".to_string());
+                }
+                if dev.init().is_ok() {
+                    reinitialized = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(300));
+            }
+
+            if !reinitialized {
+                // If the USB handle needs resetting after the cutter cycle:
+                let _ = dev.close();
+                std::thread::sleep(Duration::from_millis(300));
+                let mut reopened = PtouchDevice::open_first()
+                    .map_err(|e| format!("Reconnect error after cut on label {}: {e}", i + 1))?;
+                reopened
+                    .init()
+                    .map_err(|e| format!("Re-init error after cut on label {}: {e}", i + 1))?;
+                dev = reopened;
+            }
+        } else if !cut_each && !is_last {
+            // Continuous strip: brief pause between chained prints so buffer paces smoothly
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
     let _ = dev.close();
     Ok(())
