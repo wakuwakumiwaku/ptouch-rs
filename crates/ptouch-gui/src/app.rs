@@ -30,12 +30,14 @@ impl PtouchApp {
 
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let (resp_tx, resp_rx) = mpsc::channel();
+        let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_cancel = cancel_flag.clone();
 
         let ctx = cc.egui_ctx.clone();
         std::thread::Builder::new()
             .name("printer-worker".to_string())
             .spawn(move || {
-                printer_worker::printer_worker(cmd_rx, resp_tx, ctx);
+                printer_worker::printer_worker(cmd_rx, resp_tx, ctx, worker_cancel);
             })
             .expect("failed to spawn printer worker thread");
 
@@ -43,6 +45,7 @@ impl PtouchApp {
             state: AppState {
                 available_fonts: ptouch_render::font::list_fonts(),
                 printer_cmd_tx: Some(cmd_tx),
+                cancel_flag,
                 ..AppState::default()
             },
             renderer: TextRenderer::new(),

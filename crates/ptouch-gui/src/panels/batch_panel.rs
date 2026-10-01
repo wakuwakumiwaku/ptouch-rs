@@ -103,8 +103,11 @@ pub fn show_batch_panel(
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let connected = state.printer_connected;
                     let busy = state.is_printer_busy();
+                    let can_print_all = connected && !busy && total_prints > 0;
 
-                    let print_btn_text = if total_prints > 0 {
+                    let print_btn_text = if busy {
+                        format!("⏳ Printing... ({total_prints} Prints)")
+                    } else if total_prints > 0 {
                         format!("🖨 Print All Labels ({total_prints} Prints)")
                     } else {
                         "🖨 Print All Labels (0 Prints)".to_string()
@@ -116,17 +119,39 @@ pub fn show_batch_panel(
                             .size(13.0)
                             .color(egui::Color32::WHITE),
                     )
-                    .fill(if connected && !busy && total_prints > 0 {
+                    .fill(if can_print_all {
                         egui::Color32::from_rgb(22, 101, 52) // Dark green
                     } else {
                         egui::Color32::from_rgb(120, 120, 120)
                     });
 
-                    if ui
-                        .add_enabled(connected && !busy && total_prints > 0, btn)
-                        .clicked()
+                    if can_print_all {
+                        if ui.add(btn).clicked() {
+                            crate::panels::toolbar::do_batch_print(state);
+                        }
+                    } else {
+                        let reason = if !connected {
+                            "Printer is not connected (check USB cable / power)"
+                        } else if busy {
+                            "Printing in progress..."
+                        } else {
+                            "All label copies are set to 0. Set at least one label to 1 or more copies."
+                        };
+                        ui.add_enabled(false, btn).on_disabled_hover_text(reason);
+                    }
+
+                    // Cancel batch button when busy
+                    if state.operation_in_progress
+                        && ui
+                            .button(
+                                egui::RichText::new("⏹ Cancel Batch")
+                                    .color(egui::Color32::from_rgb(220, 38, 38))
+                                    .strong(),
+                            )
+                            .on_hover_text("Abort remaining labels in the batch immediately")
+                            .clicked()
                     {
-                        crate::panels::toolbar::do_batch_print(state);
+                        state.request_cancel();
                     }
 
                     // Summary badge
@@ -146,6 +171,32 @@ pub fn show_batch_panel(
                 });
             });
         });
+
+    // Cartridge length warning banner
+    if let Some(total_m) = state.cartridge_total_length_m {
+        let remaining_m = (total_m - state.tape_printed_meters).max(0.0);
+        let batch_m = total_batch_mm / 1000.0;
+        if batch_m > remaining_m {
+            ui.add_space(4.0);
+            egui::Frame::new()
+                .fill(egui::Color32::from_rgb(254, 242, 242))
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(239, 68, 68)))
+                .corner_radius(4.0)
+                .inner_margin(egui::Margin::symmetric(12, 8))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "⚠️ Cartridge Warning: This batch needs ~{:.2}m tape, but only ~{:.2}m remains in the cartridge! Check tape before printing to avoid running out mid-batch.",
+                                batch_m, remaining_m
+                            ))
+                            .color(egui::Color32::from_rgb(185, 28, 28))
+                            .strong(),
+                        );
+                    });
+                });
+        }
+    }
 
     ui.add_space(8.0);
 

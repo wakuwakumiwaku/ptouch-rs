@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
-//! Application state for the P-Touch GUI.
-
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 
 use ptouch_core::protocol::PrintQuality;
@@ -228,6 +228,8 @@ pub struct AppState {
     pub next_batch_item_id: u64,
     /// Whether the batch series/text generator modal is visible.
     pub show_generator_modal: bool,
+    /// Flag signaling cancellation of an active print operation.
+    pub cancel_flag: Arc<AtomicBool>,
 }
 
 impl Default for AppState {
@@ -276,11 +278,17 @@ impl Default for AppState {
             active_batch_index: 0,
             next_batch_item_id: 1,
             show_generator_modal: false,
+            cancel_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 }
 
 impl AppState {
+    /// Signal the printer worker to abort any active print operation.
+    pub fn request_cancel(&self) {
+        self.cancel_flag.store(true, Ordering::SeqCst);
+    }
+
     pub fn is_printer_busy(&self) -> bool {
         self.operation_in_progress || self.connecting
     }

@@ -7,6 +7,8 @@
 use std::io::Write;
 #[cfg(target_os = "macos")]
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -24,6 +26,7 @@ pub fn printer_worker(
     cmd_rx: mpsc::Receiver<PrinterCommand>,
     resp_tx: mpsc::Sender<PrinterEvent>,
     ctx: egui::Context,
+    cancel_flag: Arc<AtomicBool>,
 ) {
     info!("Printer worker started");
     let mut current_target = PrinterTarget::Usb;
@@ -49,6 +52,7 @@ pub fn printer_worker(
                     &current_target,
                     &resp_tx,
                     &ctx,
+                    &cancel_flag,
                     &raster_lines,
                     chain_print,
                     precut,
@@ -68,6 +72,7 @@ pub fn printer_worker(
                     &current_target,
                     &resp_tx,
                     &ctx,
+                    &cancel_flag,
                     labels,
                     precut_each,
                     cut_each,
@@ -196,14 +201,23 @@ fn do_print(
     target: &PrinterTarget,
     tx: &mpsc::Sender<PrinterEvent>,
     ctx: &egui::Context,
+    cancel_flag: &Arc<AtomicBool>,
     raster_lines: &[Vec<u8>],
     chain_print: bool,
     precut: bool,
     copies: u32,
     quality: PrintQuality,
 ) {
+    cancel_flag.store(false, Ordering::SeqCst);
     let result = match target {
-        PrinterTarget::Usb => print_usb(raster_lines, chain_print, precut, copies, quality),
+        PrinterTarget::Usb => print_usb(
+            raster_lines,
+            chain_print,
+            precut,
+            copies,
+            quality,
+            cancel_flag,
+        ),
         #[cfg(any(target_os = "macos", test))]
         PrinterTarget::Bluetooth { address, .. } => print_bluetooth(address, raster_lines),
     };
@@ -223,11 +237,16 @@ fn print_usb(
     precut: bool,
     copies: u32,
     quality: PrintQuality,
+    cancel_flag: &Arc<AtomicBool>,
 ) -> Result<(), String> {
     let mut dev = PtouchDevice::open_first().map_err(|e| format!("Connect error: {e}"))?;
     dev.init().map_err(|e| format!("Init error: {e}"))?;
     let copies = copies.max(1);
     for copy in 1..=copies {
+        if cancel_flag.load(Ordering::SeqCst) {
+            let _ = dev.close();
+            return Err("Print cancelled by user".to_string());
+        }
         let is_last = copy == copies;
         let is_first = copy == 1;
         let chain_this_copy = if is_last { chain_print } else { true };
@@ -239,24 +258,38 @@ fn print_usb(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn do_print_batch(
     target: &PrinterTarget,
     tx: &mpsc::Sender<PrinterEvent>,
     ctx: &egui::Context,
+    cancel_flag: &Arc<AtomicBool>,
     labels: Vec<Vec<Vec<u8>>>,
     precut_each: bool,
     cut_each: bool,
     quality: PrintQuality,
 ) {
+    cancel_flag.store(false, Ordering::SeqCst);
     let result = match target {
-        PrinterTarget::Usb => {
-            print_usb_batch(&labels, precut_each, cut_each, quality, tx, target, ctx)
-        }
+        PrinterTarget::Usb => print_usb_batch(
+            &labels,
+            precut_each,
+            cut_each,
+            quality,
+            tx,
+            target,
+            ctx,
+            cancel_flag,
+        ),
         #[cfg(any(target_os = "macos", test))]
         PrinterTarget::Bluetooth { address, .. } => {
             let total = labels.len();
             let mut err = None;
             for (i, lines) in labels.iter().enumerate() {
+                if cancel_flag.load(Ordering::SeqCst) {
+                    err = Some("Batch print cancelled by user".to_string());
+                    break;
+                }
                 if let Err(e) = print_bluetooth(address, lines) {
                     err = Some(e);
                     break;
@@ -283,6 +316,7 @@ fn do_print_batch(
     ctx.request_repaint();
 }
 
+#[allow(clippy::too_many_arguments)]
 fn print_usb_batch(
     labels: &[Vec<Vec<u8>>],
     precut_each: bool,
@@ -291,6 +325,7 @@ fn print_usb_batch(
     tx: &mpsc::Sender<PrinterEvent>,
     target: &PrinterTarget,
     ctx: &egui::Context,
+    cancel_flag: &Arc<AtomicBool>,
 ) -> Result<(), String> {
     if labels.is_empty() {
         return Ok(());
@@ -299,6 +334,10 @@ fn print_usb_batch(
     dev.init().map_err(|e| format!("Init error: {e}"))?;
     let total = labels.len();
     for (i, label_lines) in labels.iter().enumerate() {
+        if cancel_flag.load(Ordering::SeqCst) {
+            let _ = dev.close();
+            return Err("Batch print cancelled by user".to_string());
+        }
         let is_first = i == 0;
         let is_last = i == total - 1;
         let precut = if cut_each {

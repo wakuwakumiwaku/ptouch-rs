@@ -43,7 +43,22 @@ pub fn show_status_bar(ui: &mut egui::Ui, state: &AppState) {
 
         // Status message (right-aligned)
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(&state.status_message);
+            if state.operation_in_progress {
+                ui.spinner();
+                ui.label(
+                    egui::RichText::new(&state.status_message)
+                        .color(egui::Color32::from_rgb(30, 64, 175))
+                        .strong(),
+                );
+            } else if state.status_message.to_lowercase().contains("error") {
+                ui.label(
+                    egui::RichText::new(&state.status_message)
+                        .color(egui::Color32::from_rgb(220, 38, 38))
+                        .strong(),
+                );
+            } else {
+                ui.label(&state.status_message);
+            }
         });
     });
 }

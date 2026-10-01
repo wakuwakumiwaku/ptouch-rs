@@ -118,9 +118,25 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
         let has_bitmap = state.preview_bitmap.is_some() && !state.needs_rerender;
 
         // Print active label
-        if ui
-            .add_enabled(connected && !busy && has_bitmap, egui::Button::new("Print"))
-            .clicked()
+        let can_print = connected && !busy && has_bitmap && state.copies > 0;
+        let print_btn = egui::Button::new("Print");
+        let print_resp = if can_print {
+            ui.add(print_btn)
+        } else {
+            let reason = if !connected {
+                "Printer is not connected (check USB cable or power)"
+            } else if busy {
+                "Printer is busy with an active operation..."
+            } else if !has_bitmap {
+                "Rendering label preview..."
+            } else {
+                "NUMBER TO PRINT is set to 0. Increment copies to print."
+            };
+            ui.add_enabled(false, print_btn)
+                .on_disabled_hover_text(reason)
+        };
+
+        if print_resp.clicked()
             && let Some(ref bitmap) = state.preview_bitmap
         {
             let raw_lines = raster::bitmap_to_raster_lines(bitmap, state.printer_max_px);
@@ -198,25 +214,64 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
         // Print All (Batch) button
         let total_prints = state.total_batch_prints();
         if total_prints > 1 || state.batch_items.len() > 1 {
+            let can_print_batch = connected && !busy && total_prints > 0;
             let batch_btn = egui::Button::new(
                 egui::RichText::new(format!("🖨 Print All ({total_prints})"))
                     .strong()
-                    .color(egui::Color32::from_rgb(22, 101, 52)),
+                    .color(if can_print_batch {
+                        egui::Color32::from_rgb(22, 101, 52)
+                    } else {
+                        egui::Color32::GRAY
+                    }),
             );
-            if ui
-                .add_enabled(connected && !busy && total_prints > 0, batch_btn)
-                .clicked()
-            {
+            let batch_resp = if can_print_batch {
+                ui.add(batch_btn)
+            } else {
+                let reason = if !connected {
+                    "Printer is not connected"
+                } else if busy {
+                    "Printing in progress..."
+                } else {
+                    "All label copies are set to 0"
+                };
+                ui.add_enabled(false, batch_btn)
+                    .on_disabled_hover_text(reason)
+            };
+            if batch_resp.clicked() {
                 do_batch_print(state);
             }
         }
 
-        if ui
-            .add_enabled(
-                connected && !busy && !state.printer_target.is_bluetooth(),
-                egui::Button::new("Feed & Cut"),
-            )
-            .clicked()
+        // Stop / Cancel button when printing
+        if state.operation_in_progress
+            && ui
+                .button(
+                    egui::RichText::new("⏹ Cancel")
+                        .color(egui::Color32::from_rgb(220, 38, 38))
+                        .strong(),
+                )
+                .on_hover_text("Abort the active print operation immediately")
+                .clicked()
+        {
+            state.request_cancel();
+        }
+
+        let can_feed_cut = connected && !busy && !state.printer_target.is_bluetooth();
+        let feed_btn = egui::Button::new("Feed & Cut");
+        let feed_resp = if can_feed_cut {
+            ui.add(feed_btn)
+        } else {
+            let reason = if !connected {
+                "Printer is not connected"
+            } else if busy {
+                "Printer is busy..."
+            } else {
+                "Feed & cut not supported on Bluetooth"
+            };
+            ui.add_enabled(false, feed_btn)
+                .on_disabled_hover_text(reason)
+        };
+        if feed_resp.clicked()
             && let Some(ref tx) = state.printer_cmd_tx
         {
             let _ = tx.send(PrinterCommand::FeedAndCut(state.printer_target.clone()));
