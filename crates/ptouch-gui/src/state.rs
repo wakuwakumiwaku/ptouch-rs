@@ -94,10 +94,11 @@ pub enum PrinterCommand {
         quality: PrintQuality,
         target: PrinterTarget,
     },
-    /// Print multiple labels in a continuous chained batch.
+    /// Print multiple labels in a batch.
     PrintBatch {
         labels: Vec<Vec<Vec<u8>>>,
-        precut_first: bool,
+        precut_each: bool,
+        cut_each: bool,
         quality: PrintQuality,
         target: PrinterTarget,
     },

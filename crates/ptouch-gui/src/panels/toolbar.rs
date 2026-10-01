@@ -348,12 +348,14 @@ pub fn do_batch_print(state: &mut AppState) {
 
     state.tape_printed_meters += total_mm / 1000.0;
 
-    let precut_first = matches!(state.cut_mode, crate::state::CutMarginMode::PretrimCut);
+    let precut_each = matches!(state.cut_mode, crate::state::CutMarginMode::PretrimCut);
+    let cut_each = state.auto_cut && state.cut_mode != crate::state::CutMarginMode::ChainPrint;
 
     if let Some(ref tx) = state.printer_cmd_tx {
         let _ = tx.send(PrinterCommand::PrintBatch {
             labels: all_labels_raster,
-            precut_first,
+            precut_each,
+            cut_each,
             quality: state.print_quality,
             target: state.printer_target.clone(),
         });

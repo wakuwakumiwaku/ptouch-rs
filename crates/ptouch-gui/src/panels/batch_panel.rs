@@ -92,6 +92,14 @@ pub fn show_batch_panel(
                     do_open_batch(state);
                 }
 
+                ui.separator();
+
+                ui.checkbox(&mut state.auto_cut, "✂ Cut between labels")
+                    .on_hover_text(
+                        "When checked, the printer automatically cuts between every label.\n\
+                         When unchecked, prints as a continuous strip (cutting only after the last label).",
+                    );
+
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let connected = state.printer_connected;
                     let busy = state.is_printer_busy();
@@ -122,9 +130,14 @@ pub fn show_batch_panel(
                     }
 
                     // Summary badge
+                    let cut_tag = if state.auto_cut && state.cut_mode != crate::state::CutMarginMode::ChainPrint {
+                        "✂ Cut each"
+                    } else {
+                        "⛓ Continuous strip"
+                    };
                     ui.label(
                         egui::RichText::new(format!(
-                            "{total_labels} label(s) • {total_prints} print(s) • ~{:.1} cm tape",
+                            "{total_labels} label(s) • {total_prints} print(s) • ~{:.1} cm • {cut_tag}",
                             total_batch_mm / 10.0
                         ))
                         .strong()

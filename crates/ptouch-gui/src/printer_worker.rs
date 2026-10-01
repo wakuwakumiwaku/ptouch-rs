@@ -58,7 +58,8 @@ pub fn printer_worker(
             }
             Ok(PrinterCommand::PrintBatch {
                 labels,
-                precut_first,
+                precut_each,
+                cut_each,
                 quality,
                 target,
             }) => {
@@ -68,7 +69,8 @@ pub fn printer_worker(
                     &resp_tx,
                     &ctx,
                     labels,
-                    precut_first,
+                    precut_each,
+                    cut_each,
                     quality,
                 );
             }
@@ -242,11 +244,14 @@ fn do_print_batch(
     tx: &mpsc::Sender<PrinterEvent>,
     ctx: &egui::Context,
     labels: Vec<Vec<Vec<u8>>>,
-    precut_first: bool,
+    precut_each: bool,
+    cut_each: bool,
     quality: PrintQuality,
 ) {
     let result = match target {
-        PrinterTarget::Usb => print_usb_batch(&labels, precut_first, quality, tx, target, ctx),
+        PrinterTarget::Usb => {
+            print_usb_batch(&labels, precut_each, cut_each, quality, tx, target, ctx)
+        }
         #[cfg(any(target_os = "macos", test))]
         PrinterTarget::Bluetooth { address, .. } => {
             let total = labels.len();
@@ -280,7 +285,8 @@ fn do_print_batch(
 
 fn print_usb_batch(
     labels: &[Vec<Vec<u8>>],
-    precut_first: bool,
+    precut_each: bool,
+    cut_each: bool,
     quality: PrintQuality,
     tx: &mpsc::Sender<PrinterEvent>,
     target: &PrinterTarget,
@@ -295,8 +301,12 @@ fn print_usb_batch(
     for (i, label_lines) in labels.iter().enumerate() {
         let is_first = i == 0;
         let is_last = i == total - 1;
-        let precut = is_first && precut_first;
-        let chain = !is_last;
+        let precut = if cut_each {
+            precut_each
+        } else {
+            is_first && precut_each
+        };
+        let chain = if cut_each { false } else { !is_last };
         dev.print_raster(label_lines, chain, precut, quality)
             .map_err(|e| format!("Print error on label {}/{}: {}", i + 1, total, e))?;
         let _ = tx.send(PrinterEvent {
