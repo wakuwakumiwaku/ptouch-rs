@@ -8,7 +8,32 @@ use std::sync::mpsc;
 use ptouch_core::protocol::PrintQuality;
 use ptouch_render::bitmap::LabelBitmap;
 
+use ptouch_render::document::{DOCUMENT_VERSION, LabelDocument};
+
 pub use ptouch_render::document::LabelElement;
+
+/// High-level view mode for the GUI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ViewMode {
+    /// Visual single-label canvas editor.
+    #[default]
+    Designer,
+    /// Batch overview showing all labels side-by-side / in a list with "NUMBER TO PRINT".
+    Batch,
+}
+
+/// A label item within the multi-label batch project.
+#[derive(Clone)]
+pub struct BatchItem {
+    pub id: u64,
+    pub title: String,
+    /// Number of copies to print for this label (NUMBER TO PRINT).
+    pub copies: u32,
+    pub document: LabelDocument,
+    pub preview_bitmap: Option<LabelBitmap>,
+    pub preview_texture: Option<egui::TextureHandle>,
+    pub dirty: bool,
+}
 
 /// Printer connection selected in the GUI.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,12 +85,19 @@ pub enum PrinterCommand {
     DiscoverBluetooth,
     /// Poll for a connected printer (query status only, no init).
     Poll(PrinterTarget),
-    /// Print raster data.
+    /// Print raster data for a single label.
     Print {
         raster_lines: Vec<Vec<u8>>,
         chain_print: bool,
         precut: bool,
         copies: u32,
+        quality: PrintQuality,
+        target: PrinterTarget,
+    },
+    /// Print multiple labels in a continuous chained batch.
+    PrintBatch {
+        labels: Vec<Vec<Vec<u8>>>,
+        precut_first: bool,
         quality: PrintQuality,
         target: PrinterTarget,
     },
@@ -97,6 +129,8 @@ pub enum PrinterResponse {
     Disconnected,
     /// Print job completed successfully.
     PrintDone,
+    /// Batch progress update: current label (1-indexed) out of total prints.
+    BatchProgress { current: u32, total: u32 },
     /// Feed and cut completed successfully.
     FeedAndCutDone,
     /// An operation failed.
@@ -183,6 +217,16 @@ pub struct AppState {
     pub print_quality: PrintQuality,
     /// Channel sender for commands to the printer worker thread.
     pub printer_cmd_tx: Option<mpsc::Sender<PrinterCommand>>,
+    /// Active view mode (single-label designer or multi-label batch overview).
+    pub view_mode: ViewMode,
+    /// Multi-label batch items in this project.
+    pub batch_items: Vec<BatchItem>,
+    /// Index of the active label being designed.
+    pub active_batch_index: usize,
+    /// Monotonic ID counter for batch items.
+    pub next_batch_item_id: u64,
+    /// Whether the batch series/text generator modal is visible.
+    pub show_generator_modal: bool,
 }
 
 impl Default for AppState {
@@ -192,7 +236,7 @@ impl Default for AppState {
             selected_element: None,
             tape_width_mm: 12,
             tape_width_px: 76,
-            font_name: "DejaVuSans".to_string(),
+            font_name: "Inter".to_string(),
             font_margin: 0,
             overall_flip_h: false,
             overall_flip_v: false,
@@ -226,6 +270,11 @@ impl Default for AppState {
             printer_quality_modes: false,
             print_quality: PrintQuality::Standard,
             printer_cmd_tx: None,
+            view_mode: ViewMode::Designer,
+            batch_items: Vec::new(),
+            active_batch_index: 0,
+            next_batch_item_id: 1,
+            show_generator_modal: false,
         }
     }
 }
@@ -253,16 +302,217 @@ impl AppState {
         self.needs_rerender = true;
     }
 
-    /// Ensure the selected element index is valid.
+    /// Ensure the selected element index is valid, defaulting to the first element if available.
     pub fn validate_selection(&mut self) {
-        if let Some(idx) = self.selected_element
-            && idx >= self.elements.len()
-        {
-            self.selected_element = if self.elements.is_empty() {
-                None
-            } else {
-                Some(self.elements.len() - 1)
-            };
+        if self.elements.is_empty() {
+            self.selected_element = None;
+        } else if let Some(idx) = self.selected_element {
+            if idx >= self.elements.len() {
+                self.selected_element = Some(self.elements.len() - 1);
+            }
+        } else {
+            self.selected_element = Some(0);
         }
+    }
+
+    /// Total number of labels to print across all batch items.
+    pub fn total_batch_prints(&self) -> u32 {
+        self.batch_items.iter().map(|item| item.copies).sum()
+    }
+
+    /// Ensure `batch_items` has at least one item initialized.
+    pub fn ensure_batch_initialized(&mut self) {
+        if self.batch_items.is_empty() {
+            if self.elements.is_empty() {
+                self.elements.push(LabelElement::Text {
+                    content: "Label 1".to_string(),
+                    font_size: None,
+                    align: ptouch_render::text::TextAlign::Center,
+                    rotation: 0.0,
+                    flip_h: false,
+                    flip_v: false,
+                });
+                self.selected_element = Some(0);
+                self.mark_dirty();
+            }
+            let doc = self.create_document_from_state();
+            let title = self.derive_label_title();
+            self.batch_items.push(BatchItem {
+                id: self.next_batch_item_id,
+                title,
+                copies: 1,
+                document: doc,
+                preview_bitmap: self.preview_bitmap.clone(),
+                preview_texture: self.preview_texture.clone(),
+                dirty: false,
+            });
+            self.next_batch_item_id += 1;
+            self.active_batch_index = 0;
+            if self.selected_element.is_none() && !self.elements.is_empty() {
+                self.selected_element = Some(0);
+            }
+        }
+    }
+
+    /// Sync the active editor state into `batch_items[active_batch_index]`.
+    pub fn sync_active_to_batch(&mut self) {
+        if self.batch_items.is_empty() {
+            self.ensure_batch_initialized();
+            return;
+        }
+
+        if self.active_batch_index < self.batch_items.len() {
+            let doc = self.create_document_from_state();
+            let title = self.derive_label_title();
+            let preview_bmp = self.preview_bitmap.clone();
+            let preview_tex = self.preview_texture.clone();
+            let item = &mut self.batch_items[self.active_batch_index];
+            item.document = doc;
+            item.title = title;
+            item.preview_bitmap = preview_bmp;
+            item.preview_texture = preview_tex;
+            item.dirty = false;
+        }
+    }
+
+    /// Switch active label in the batch to `new_idx`.
+    pub fn switch_active_batch(&mut self, new_idx: usize) {
+        if new_idx >= self.batch_items.len() {
+            return;
+        }
+        if new_idx != self.active_batch_index {
+            self.sync_active_to_batch();
+            self.active_batch_index = new_idx;
+        }
+        let doc = self.batch_items[new_idx].document.clone();
+        if !self.printer_target.is_bluetooth() {
+            self.tape_width_mm = doc.tape_width_mm;
+            self.update_tape_pixels();
+        }
+        self.font_name = doc.font_name;
+        self.font_margin = doc.font_margin;
+        self.overall_flip_h = doc.flip_h;
+        self.overall_flip_v = doc.flip_v;
+        self.elements = doc.elements;
+        self.selected_element = if self.elements.is_empty() {
+            None
+        } else {
+            Some(0)
+        };
+        self.mark_dirty();
+    }
+
+    /// Add a blank label to the batch.
+    pub fn add_blank_batch_item(&mut self) {
+        self.sync_active_to_batch();
+        let new_num = self.batch_items.len() + 1;
+        let doc = LabelDocument {
+            version: DOCUMENT_VERSION,
+            tape_width_mm: self.tape_width_mm,
+            dpi: self.printer_dpi,
+            font_name: self.font_name.clone(),
+            font_margin: self.font_margin,
+            flip_h: false,
+            flip_v: false,
+            elements: vec![LabelElement::Text {
+                content: format!("Label {}", new_num),
+                font_size: None,
+                align: ptouch_render::text::TextAlign::Center,
+                rotation: 0.0,
+                flip_h: false,
+                flip_v: false,
+            }],
+        };
+        let new_id = self.next_batch_item_id;
+        self.next_batch_item_id += 1;
+        let title = format!("Label {}", new_num);
+        self.batch_items.push(BatchItem {
+            id: new_id,
+            title,
+            copies: 1,
+            document: doc,
+            preview_bitmap: None,
+            preview_texture: None,
+            dirty: true,
+        });
+        self.switch_active_batch(self.batch_items.len() - 1);
+        self.selected_element = Some(0);
+    }
+
+    /// Duplicate the batch item at `idx`.
+    pub fn duplicate_batch_item(&mut self, idx: usize) {
+        if idx >= self.batch_items.len() {
+            return;
+        }
+        self.sync_active_to_batch();
+        let mut cloned = self.batch_items[idx].clone();
+        let new_id = self.next_batch_item_id;
+        self.next_batch_item_id += 1;
+        cloned.id = new_id;
+        cloned.title = format!("{} (copy)", cloned.title);
+        cloned.dirty = true;
+        self.batch_items.insert(idx + 1, cloned);
+        self.switch_active_batch(idx + 1);
+    }
+
+    /// Remove the batch item at `idx`.
+    pub fn remove_batch_item(&mut self, idx: usize) {
+        if self.batch_items.len() <= 1 {
+            return; // keep at least 1 item
+        }
+        self.batch_items.remove(idx);
+        let new_active = if self.active_batch_index >= self.batch_items.len() {
+            self.batch_items.len() - 1
+        } else if self.active_batch_index > idx {
+            self.active_batch_index - 1
+        } else {
+            self.active_batch_index
+        };
+        self.active_batch_index = new_active;
+        let doc = self.batch_items[new_active].document.clone();
+        self.tape_width_mm = doc.tape_width_mm;
+        self.font_name = doc.font_name;
+        self.font_margin = doc.font_margin;
+        self.overall_flip_h = doc.flip_h;
+        self.overall_flip_v = doc.flip_v;
+        self.elements = doc.elements;
+        self.selected_element = if self.elements.is_empty() {
+            None
+        } else {
+            Some(0)
+        };
+        self.update_tape_pixels();
+        self.mark_dirty();
+    }
+
+    /// Helper to create a LabelDocument from current state.
+    pub fn create_document_from_state(&self) -> LabelDocument {
+        LabelDocument {
+            version: DOCUMENT_VERSION,
+            tape_width_mm: self.tape_width_mm,
+            dpi: self.printer_dpi,
+            font_name: self.font_name.clone(),
+            font_margin: self.font_margin,
+            flip_h: self.overall_flip_h,
+            flip_v: self.overall_flip_v,
+            elements: self.elements.clone(),
+        }
+    }
+
+    /// Derive a friendly label title from the first text element or fallback.
+    pub fn derive_label_title(&self) -> String {
+        for el in &self.elements {
+            if let LabelElement::Text { content, .. } = el {
+                let first_line = content.lines().next().unwrap_or("").trim();
+                if !first_line.is_empty() {
+                    return if first_line.len() > 24 {
+                        format!("{}...", &first_line[..24])
+                    } else {
+                        first_line.to_string()
+                    };
+                }
+            }
+        }
+        format!("Label {}", self.active_batch_index + 1)
     }
 }

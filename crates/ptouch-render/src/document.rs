@@ -58,6 +58,90 @@ pub struct LabelDocument {
     pub elements: Vec<LabelElement>,
 }
 
+fn default_batch_copies() -> u32 {
+    1
+}
+
+/// An entry in a label batch with its own document and print count.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchEntry {
+    /// Optional label title or description.
+    #[serde(default)]
+    pub title: String,
+    /// Number of copies to print for this label (NUMBER TO PRINT).
+    #[serde(default = "default_batch_copies")]
+    pub copies: u32,
+    /// The label document.
+    pub document: LabelDocument,
+}
+
+/// A batch project containing multiple labels, each with an individual print count.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LabelBatch {
+    /// Layout format version.
+    pub version: u32,
+    /// Default tape width in millimeters for the batch.
+    pub tape_width_mm: u8,
+    /// Default print resolution in DPI for the batch.
+    #[serde(default = "default_dpi")]
+    pub dpi: u16,
+    /// Ordered list of batch entries.
+    pub labels: Vec<BatchEntry>,
+}
+
+impl LabelBatch {
+    /// Create a new batch with a single label.
+    pub fn new(document: LabelDocument, title: impl Into<String>, copies: u32) -> Self {
+        let tape_width_mm = document.tape_width_mm;
+        let dpi = document.dpi;
+        Self {
+            version: DOCUMENT_VERSION,
+            tape_width_mm,
+            dpi,
+            labels: vec![BatchEntry {
+                title: title.into(),
+                copies,
+                document,
+            }],
+        }
+    }
+
+    /// Serialize the batch to a TOML string.
+    pub fn to_toml_string(&self) -> Result<String> {
+        Ok(toml::to_string(self)?)
+    }
+
+    /// Parse a batch from a TOML string. Supports both batch documents and single LabelDocuments.
+    pub fn from_toml_str(text: &str) -> Result<Self> {
+        // Try parsing directly as LabelBatch
+        if let Ok(mut batch) = toml::from_str::<LabelBatch>(text) {
+            if batch.version == 0 || batch.version > DOCUMENT_VERSION {
+                return Err(RenderError::Layout(format!(
+                    "unsupported batch layout version {} (this build supports up to {})",
+                    batch.version, DOCUMENT_VERSION
+                )));
+            }
+            for entry in &mut batch.labels {
+                entry.document.decode_image_caches()?;
+            }
+            return Ok(batch);
+        }
+
+        // Fall back to parsing as a single LabelDocument
+        let doc = LabelDocument::from_toml_str(text)?;
+        Ok(LabelBatch {
+            version: doc.version,
+            tape_width_mm: doc.tape_width_mm,
+            dpi: doc.dpi,
+            labels: vec![BatchEntry {
+                title: "Label 1".to_string(),
+                copies: 1,
+                document: doc,
+            }],
+        })
+    }
+}
+
 impl LabelDocument {
     /// Serialize the document to a TOML string.
     pub fn to_toml_string(&self) -> Result<String> {
@@ -935,5 +1019,45 @@ mod tests {
             }
             _ => panic!("expected image element"),
         }
+    }
+
+    #[test]
+    fn test_label_batch_round_trip() {
+        let doc1 = text_doc("Label 1");
+        let doc2 = text_doc("Label 2");
+        let batch = LabelBatch {
+            version: DOCUMENT_VERSION,
+            tape_width_mm: 12,
+            dpi: 180,
+            labels: vec![
+                BatchEntry {
+                    title: "First".to_string(),
+                    copies: 3,
+                    document: doc1,
+                },
+                BatchEntry {
+                    title: "Second".to_string(),
+                    copies: 1,
+                    document: doc2,
+                },
+            ],
+        };
+        let toml_str = batch.to_toml_string().expect("serialize batch");
+        let parsed = LabelBatch::from_toml_str(&toml_str).expect("deserialize batch");
+        assert_eq!(parsed.labels.len(), 2);
+        assert_eq!(parsed.labels[0].title, "First");
+        assert_eq!(parsed.labels[0].copies, 3);
+        assert_eq!(parsed.labels[1].title, "Second");
+        assert_eq!(parsed.labels[1].copies, 1);
+    }
+
+    #[test]
+    fn test_label_batch_fallback_from_single_doc() {
+        let doc = text_doc("Single Label");
+        let toml_str = doc.to_toml_string().expect("serialize doc");
+        let parsed = LabelBatch::from_toml_str(&toml_str).expect("deserialize single as batch");
+        assert_eq!(parsed.labels.len(), 1);
+        assert_eq!(parsed.labels[0].copies, 1);
+        assert_eq!(text_of(&parsed.labels[0].document), "Single Label");
     }
 }

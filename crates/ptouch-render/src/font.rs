@@ -7,16 +7,39 @@
 
 use cosmic_text::FontSystem;
 
+/// Create a new `FontSystem` with system fonts and bundled fonts loaded.
+pub fn create_font_system() -> FontSystem {
+    let mut font_system = FontSystem::new();
+    load_bundled_fonts(font_system.db_mut());
+    font_system
+}
+
+/// Load bundled embedded fonts (Inter, DINish, Frutiger) into a font database.
+pub fn load_bundled_fonts(db: &mut cosmic_text::fontdb::Database) {
+    db.load_font_data(include_bytes!("../../../data/fonts/Inter.ttf").to_vec());
+    db.load_font_data(include_bytes!("../../../data/fonts/DINish-Regular.otf").to_vec());
+    db.load_font_data(include_bytes!("../../../data/fonts/DINish-Bold.otf").to_vec());
+    db.load_font_data(include_bytes!("../../../data/fonts/Frutiger-Roman.ttf").to_vec());
+    db.load_font_data(include_bytes!("../../../data/fonts/Frutiger-Bold.ttf").to_vec());
+}
+
 /// Find a font by name and return its full family name if found.
 ///
 /// The search is case-insensitive and matches on family name.
 pub fn find_font(name: &str) -> Option<String> {
-    let font_system = FontSystem::new();
+    let font_system = create_font_system();
     let name_lower = name.to_lowercase();
+
+    // Map common aliases/short names
+    let search_term = match name_lower.as_str() {
+        "din" | "din 1451" | "din-1451" => "dinish",
+        "frutiger" => "frutiger",
+        _ => &name_lower,
+    };
 
     for face in font_system.db().faces() {
         for family in &face.families {
-            if family.0.to_lowercase().contains(&name_lower) {
+            if family.0.to_lowercase().contains(search_term) {
                 return Some(family.0.clone());
             }
         }
@@ -25,11 +48,11 @@ pub fn find_font(name: &str) -> Option<String> {
     None
 }
 
-/// List all available font family names on the system.
+/// List all available font family names on the system, including bundled fonts.
 ///
 /// Returns a sorted, deduplicated list of family names.
 pub fn list_fonts() -> Vec<String> {
-    let font_system = FontSystem::new();
+    let font_system = create_font_system();
     let mut names: Vec<String> = Vec::new();
 
     for face in font_system.db().faces() {
@@ -66,8 +89,16 @@ mod tests {
     }
 
     #[test]
-    fn test_find_font_nonexistent() {
+    fn test_find_nonexistent() {
         let result = find_font("ThisFontDefinitelyDoesNotExist12345");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_bundled_fonts() {
+        assert_eq!(find_font("Inter"), Some("Inter".to_string()));
+        assert_eq!(find_font("din"), Some("DINish".to_string()));
+        assert_eq!(find_font("DIN 1451"), Some("DINish".to_string()));
+        assert_eq!(find_font("frutiger"), Some("Frutiger".to_string()));
     }
 }

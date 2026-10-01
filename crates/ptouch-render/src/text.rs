@@ -52,7 +52,7 @@ impl TextRenderer {
     /// Create a new text renderer with system fonts loaded.
     pub fn new() -> Self {
         Self {
-            font_system: FontSystem::new(),
+            font_system: crate::font::create_font_system(),
             swash_cache: SwashCache::new(),
         }
     }
@@ -110,10 +110,12 @@ impl TextRenderer {
         let line_height = (font_size * 1.2).ceil();
         let metrics = Metrics::new(font_size, line_height);
 
-        let family = if font_name.is_empty() {
+        let resolved = crate::font::find_font(font_name);
+        let effective_name = resolved.as_deref().unwrap_or(font_name);
+        let family = if effective_name.is_empty() {
             Family::SansSerif
         } else {
-            Family::Name(font_name)
+            Family::Name(effective_name)
         };
         let attrs = Attrs::new().family(family);
         let cosmic_align = Some(align.to_cosmic());

@@ -27,17 +27,30 @@ in [ptouch-rs-notstupid](https://github.com/wakuwakumiwaku/ptouch-rs-notstupid) 
 
 ## Features
 
+- **Multi-Label Batch Projects**: Manage multiple labels in a single project with live visual tape previews and an explicit **NUMBER TO PRINT** copy counter directly beside each label.
+- **Continuous Zero-Waste Batch Printing**: Print an entire queue of different labels in one continuous chain session (`chain = true`), cutting tape waste between labels down to 0 mm.
+- **Quick Batch Generation**: Instant creation of series tags (sequential numbering `Server-01` to `Server-24` with zero-padding) or line-by-line text lists.
+- **Bundled Professional Typography**: Embedded **Inter** (modern ultra-legible default), **DIN 1451 / DINish** (German industrial engineering standard), and **Frutiger** (maximum distance recognition).
 - Print text labels with custom font, size, alignment and rotation
 - Print images (PNG, JPEG, GIF, BMP, TIFF, WebP, SVG, and more)
 - Compose multi-element labels (text + image + cut mark + padding)
-- Save and reload designs as self-contained `.ptl` layout files (images
-  embedded), then print them from the GUI or CLI
+- Save and reload designs as self-contained `.ptl` (single label) or `.ptb` (multi-label batch) layout files with embedded images
 - Template layouts with `{{name}}` placeholders and batch-print from a CSV
 - Chain print and multi-copy support
 - Print quality modes on 360 dpi models (high resolution 360x720, draft 360x180)
 - GUI with live preview, zoom, and drag-and-drop element reordering
 - Export to image (PNG, JPEG, BMP, GIF, TIFF, WebP) without a printer connected
 - Feed and cut tape without printing
+
+## Hardware Safety & On-Board Memory FAQ
+
+| Question | Answer & Technical Detail |
+| :--- | :--- |
+| **Can transferring layouts to printer flash brick or damage the device?** | **No.** Brother printers with on-board memory (like the PT-D600) have a dedicated user storage partition that is physically and logically isolated from the bootloader and firmware ROM. |
+| **How can I recover if a transferred template is corrupt or freezes?** | Brother printers provide a physical hardware reset: holding **Shift + R** (or **Shift + Backspace**) while powering on, or selecting *Menu $\rightarrow$ Reset $\rightarrow$ Transfer Data Reset*, wipes all user templates back to factory default in seconds. |
+| **Does direct USB printing wear out flash memory?** | **No.** Direct printing uses 100% volatile RAM (`ESC i a 01h` raster mode). Zero writes are made to permanent flash memory, ensuring unlimited print cycles with zero wear. |
+| **Which printer models support saving templates to memory?** | Models equipped with user memory and physical screens/keyboards (e.g. PT-D600, PT-E550W, PT-P900W). Raster-only models (e.g. PT-P300BT Cube, PT-D210) do not have flash storage and print strictly via direct USB/Bluetooth raster. |
+| **How does software protect the printer during communication?** | The software queries USB device status and capability descriptors before issuing commands, validates all payload lengths and checksums in memory, and never writes in uncontrolled loops. |
 
 ## Supported Printers
 
@@ -222,7 +235,7 @@ cat people.csv | ptouch print --layout badge.ptl --csv - --set dept=Eng
 | | `--allow-missing` | Render placeholders with no value as blank |
 | `-i` | `--image` | Image file path |
 | `-o` | `--output` | Export to image file instead of printing |
-| `-f` | `--font` | Font name (default: DejaVuSans) |
+| `-f` | `--font` | Font name (default: Inter, bundled: Inter, DINish/DIN 1451, Frutiger) |
 | `-s` | `--size` | Font size in points (auto if omitted) |
 | `-m` | `--margin` | Top/bottom margin in pixels |
 | `-a` | `--align` | Text alignment: left, center, right |

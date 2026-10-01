@@ -104,8 +104,8 @@ struct PrintArgs {
     #[arg(short = 'o', long)]
     output: Option<String>,
 
-    /// Font name
-    #[arg(short = 'f', long, default_value = "DejaVuSans")]
+    /// Font name (bundled: Inter, DINish/DIN 1451, Frutiger)
+    #[arg(short = 'f', long, default_value = "Inter")]
     font: String,
 
     /// Font size in points (auto-detected if not set)

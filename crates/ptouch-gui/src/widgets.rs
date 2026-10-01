@@ -32,6 +32,7 @@ pub fn image_file_dialog() -> rfd::FileDialog {
 }
 
 /// Pick an image file with fallback to zenity and kdialog.
+#[allow(clippy::collapsible_if)]
 pub fn pick_image_file() -> Option<PathBuf> {
     if let Some(path) = image_file_dialog().pick_file() {
         return Some(path);
@@ -53,7 +54,11 @@ pub fn pick_image_file() -> Option<PathBuf> {
         }
     }
     if let Ok(output) = std::process::Command::new("kdialog")
-        .args(["--getopenfilename", ".", "*.png *.jpg *.jpeg *.svg *.bmp *.gif *.webp|Images"])
+        .args([
+            "--getopenfilename",
+            ".",
+            "*.png *.jpg *.jpeg *.svg *.bmp *.gif *.webp|Images",
+        ])
         .output()
     {
         if output.status.success() {
@@ -67,6 +72,7 @@ pub fn pick_image_file() -> Option<PathBuf> {
 }
 
 /// Save an image file with fallback to zenity and kdialog.
+#[allow(clippy::collapsible_if)]
 pub fn save_image_file() -> Option<PathBuf> {
     if let Some(path) = rfd::FileDialog::new()
         .add_filter("PNG", &["png"])
@@ -139,23 +145,21 @@ pub fn pick_layout_file() -> Option<PathBuf> {
             "--file-filter=All Files | *",
         ])
         .output()
+        && output.status.success()
     {
-        if output.status.success() {
-            let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !s.is_empty() {
-                return Some(PathBuf::from(s));
-            }
+        let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !s.is_empty() {
+            return Some(PathBuf::from(s));
         }
     }
     if let Ok(output) = std::process::Command::new("kdialog")
         .args(["--getopenfilename", ".", "*.ptl|Layout files (*.ptl)"])
         .output()
+        && output.status.success()
     {
-        if output.status.success() {
-            let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !s.is_empty() {
-                return Some(PathBuf::from(s));
-            }
+        let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !s.is_empty() {
+            return Some(PathBuf::from(s));
         }
     }
     None
@@ -163,10 +167,7 @@ pub fn pick_layout_file() -> Option<PathBuf> {
 
 /// Save a layout file (`.ptl`) with fallback to zenity and kdialog.
 pub fn save_layout_file() -> Option<PathBuf> {
-    if let Some(path) = layout_file_dialog()
-        .set_file_name("label.ptl")
-        .save_file()
-    {
+    if let Some(path) = layout_file_dialog().set_file_name("label.ptl").save_file() {
         return Some(path);
     }
     if let Ok(output) = std::process::Command::new("zenity")
@@ -179,31 +180,33 @@ pub fn save_layout_file() -> Option<PathBuf> {
             "--file-filter=Layout (*.ptl) | *.ptl",
         ])
         .output()
+        && output.status.success()
     {
-        if output.status.success() {
-            let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !s.is_empty() {
-                let mut p = PathBuf::from(s);
-                if p.extension().is_none() {
-                    p = p.with_extension("ptl");
-                }
-                return Some(p);
+        let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !s.is_empty() {
+            let mut p = PathBuf::from(s);
+            if p.extension().is_none() {
+                p = p.with_extension("ptl");
             }
+            return Some(p);
         }
     }
     if let Ok(output) = std::process::Command::new("kdialog")
-        .args(["--getsavefilename", "label.ptl", "*.ptl|Layout files (*.ptl)"])
+        .args([
+            "--getsavefilename",
+            "label.ptl",
+            "*.ptl|Layout files (*.ptl)",
+        ])
         .output()
+        && output.status.success()
     {
-        if output.status.success() {
-            let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !s.is_empty() {
-                let mut p = PathBuf::from(s);
-                if p.extension().is_none() {
-                    p = p.with_extension("ptl");
-                }
-                return Some(p);
+        let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !s.is_empty() {
+            let mut p = PathBuf::from(s);
+            if p.extension().is_none() {
+                p = p.with_extension("ptl");
             }
+            return Some(p);
         }
     }
     None

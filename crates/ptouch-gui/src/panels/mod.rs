@@ -3,6 +3,8 @@
 
 //! UI panel modules for the P-Touch GUI.
 
+pub mod batch_generator_modal;
+pub mod batch_panel;
 pub mod canvas;
 pub mod properties;
 pub mod sidebar;

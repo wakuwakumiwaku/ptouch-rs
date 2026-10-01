@@ -51,10 +51,7 @@ impl PtouchApp {
     }
 
     /// Create a new application instance, optionally opening a `.ptl` layout file.
-    pub fn with_layout_file(
-        cc: &eframe::CreationContext<'_>,
-        layout_path: Option<String>,
-    ) -> Self {
+    pub fn with_layout_file(cc: &eframe::CreationContext<'_>, layout_path: Option<String>) -> Self {
         let mut app = Self::new(cc);
         if let Some(ref path_str) = layout_path {
             let path = std::path::Path::new(path_str);
@@ -191,6 +188,9 @@ impl PtouchApp {
                     self.state.operation_in_progress = false;
                     self.state.status_message = "Print complete".to_string();
                 }
+                PrinterResponse::BatchProgress { current, total } => {
+                    self.state.status_message = format!("Printing label {current} of {total}...");
+                }
                 PrinterResponse::FeedAndCutDone => {
                     self.state.operation_in_progress = false;
                     self.state.status_message = "Feed & cut done".to_string();
@@ -219,30 +219,43 @@ impl eframe::App for PtouchApp {
             panels::status_bar::show_status_bar(ui, &self.state);
         });
 
-        // Left sidebar
-        egui::Panel::left("sidebar")
-            .default_size(200.0)
-            .resizable(true)
-            .show(ui, |ui| {
-                panels::sidebar::show_sidebar(ui, &mut self.state);
-            });
+        // Mode-specific layout
+        if self.state.view_mode == crate::state::ViewMode::Designer {
+            // Left sidebar
+            egui::Panel::left("sidebar")
+                .default_size(200.0)
+                .resizable(true)
+                .show(ui, |ui| {
+                    panels::sidebar::show_sidebar(ui, &mut self.state);
+                });
 
-        // Right properties panel
-        egui::Panel::right("properties")
-            .default_size(250.0)
-            .resizable(true)
-            .show(ui, |ui| {
-                panels::properties::show_properties(ui, &mut self.state);
-            });
+            // Right properties panel
+            egui::Panel::right("properties")
+                .default_size(250.0)
+                .resizable(true)
+                .show(ui, |ui| {
+                    panels::properties::show_properties(ui, &mut self.state);
+                });
 
-        // Central canvas
-        egui::CentralPanel::default().show(ui, |ui| {
-            panels::canvas::show_canvas(ui, &mut self.state);
-        });
+            // Central canvas
+            egui::CentralPanel::default().show(ui, |ui| {
+                panels::canvas::show_canvas(ui, &mut self.state);
+            });
+        } else {
+            // Central batch panel: All labels visible with previews & NUMBER TO PRINT
+            egui::CentralPanel::default().show(ui, |ui| {
+                panels::batch_panel::show_batch_panel(ui, &mut self.state, &mut self.renderer);
+            });
+        }
 
         // Tape & cartridge setup modal (appears on startup or when invoked)
         if self.state.show_setup_modal {
             panels::tape_modal::show_tape_modal(&ctx, &mut self.state);
+        }
+
+        // Quick Generate modal (series & text list generation)
+        if self.state.show_generator_modal {
+            panels::batch_generator_modal::show_generator_modal(&ctx, &mut self.state);
         }
 
         // Re-render preview if dirty

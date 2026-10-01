@@ -17,10 +17,25 @@ pub fn show_properties(ui: &mut egui::Ui, state: &mut AppState) {
     ui.heading("Properties");
     ui.add_space(4.0);
 
+    state.validate_selection();
+
     let selected = match state.selected_element {
         Some(idx) if idx < state.elements.len() => idx,
         _ => {
-            ui.label("Select an element to edit properties");
+            ui.label("No element selected.");
+            ui.add_space(4.0);
+            if ui.button("➕ Add Text Element").clicked() {
+                state.elements.push(LabelElement::Text {
+                    content: "Label".to_string(),
+                    font_size: None,
+                    align: TextAlign::Center,
+                    rotation: 0.0,
+                    flip_h: false,
+                    flip_v: false,
+                });
+                state.selected_element = Some(0);
+                state.mark_dirty();
+            }
             return;
         }
     };
@@ -86,6 +101,23 @@ pub fn show_properties(ui: &mut egui::Ui, state: &mut AppState) {
 
     if changed {
         state.elements[selected] = element;
+        state.mark_dirty();
+    }
+
+    ui.add_space(16.0);
+    ui.separator();
+    ui.add_space(8.0);
+
+    if ui
+        .button(
+            egui::RichText::new("🗑 Delete Selected Element")
+                .color(egui::Color32::from_rgb(220, 38, 38)),
+        )
+        .on_hover_text("Remove this element from the label")
+        .clicked()
+    {
+        state.elements.remove(selected);
+        state.validate_selection();
         state.mark_dirty();
     }
 }
@@ -160,17 +192,51 @@ fn show_text_properties(ui: &mut egui::Ui, props: TextProps, state: &mut AppStat
             .hint_text("Search fonts..."),
     );
     let query = state.font_search.to_lowercase();
+    let display_current = match state.font_name.as_str() {
+        "DINish" => "DINish (DIN 1451)",
+        other => other,
+    };
     egui::ComboBox::from_id_salt("font_selector")
-        .selected_text(&state.font_name)
-        .width(150.0)
+        .selected_text(display_current)
+        .width(180.0)
         .height(300.0)
         .show_ui(ui, |ui| {
+            let bundled = [
+                ("Inter", "Inter (Modern legible sans)"),
+                ("DINish", "DINish (DIN 1451 German industrial)"),
+                ("Frutiger", "Frutiger (Airport / signage standard)"),
+            ];
+
+            if query.is_empty() {
+                ui.label(egui::RichText::new("Recommended Fonts").strong().size(11.0));
+                for (font_id, label) in &bundled {
+                    if ui
+                        .selectable_label(state.font_name == *font_id, *label)
+                        .clicked()
+                    {
+                        state.font_name = font_id.to_string();
+                        state.font_search.clear();
+                        changed = true;
+                    }
+                }
+                ui.separator();
+                ui.label(egui::RichText::new("System Fonts").strong().size(11.0));
+            }
+
             for font in &state.available_fonts {
                 if !query.is_empty() && !font.to_lowercase().contains(&query) {
                     continue;
                 }
+                if query.is_empty() && bundled.iter().any(|(b, _)| b == font) {
+                    continue;
+                }
+                let display = if font == "DINish" {
+                    "DINish (DIN 1451)"
+                } else {
+                    font.as_str()
+                };
                 if ui
-                    .selectable_label(state.font_name == *font, font)
+                    .selectable_label(state.font_name == *font, display)
                     .clicked()
                 {
                     state.font_name = font.clone();

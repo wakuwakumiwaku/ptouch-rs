@@ -7,12 +7,169 @@ use crate::state::{AppState, CutMarginMode};
 
 /// Render the central preview canvas.
 pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
-    let dpi = if state.printer_dpi > 0 { state.printer_dpi as f32 } else { 180.0 };
+    let dpi = if state.printer_dpi > 0 {
+        state.printer_dpi as f32
+    } else {
+        180.0
+    };
     let px_per_mm = dpi / 25.4;
     let copies = state.copies.max(1);
 
-    // Zoom controls and tape overview header
+    state.ensure_batch_initialized();
+
+    // Multi-label batch navigation bar
     ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new("📋 Project Batch:")
+                .strong()
+                .color(egui::Color32::from_rgb(30, 64, 175)),
+        );
+
+        let total_items = state.batch_items.len();
+        let cur_idx = state.active_batch_index;
+
+        if ui
+            .add_enabled(cur_idx > 0, egui::Button::new("◀ Prev"))
+            .clicked()
+        {
+            state.switch_active_batch(cur_idx - 1);
+        }
+
+        ui.label(egui::RichText::new(format!("Label {} of {}", cur_idx + 1, total_items)).strong());
+
+        if ui
+            .add_enabled(cur_idx + 1 < total_items, egui::Button::new("Next ▶"))
+            .clicked()
+        {
+            state.switch_active_batch(cur_idx + 1);
+        }
+
+        ui.separator();
+
+        // NUMBER TO PRINT for this label
+        if cur_idx < state.batch_items.len() {
+            ui.label(
+                egui::RichText::new("NUMBER TO PRINT:")
+                    .strong()
+                    .color(egui::Color32::from_rgb(20, 30, 45)),
+            );
+            if ui.button("➖").clicked() {
+                state.batch_items[cur_idx].copies =
+                    state.batch_items[cur_idx].copies.saturating_sub(1);
+            }
+            ui.add(
+                egui::DragValue::new(&mut state.batch_items[cur_idx].copies)
+                    .range(0..=999)
+                    .speed(0.2),
+            );
+            if ui.button("➕").clicked() {
+                state.batch_items[cur_idx].copies =
+                    state.batch_items[cur_idx].copies.saturating_add(1);
+            }
+            ui.label("copies");
+            state.copies = state.batch_items[cur_idx].copies.max(1);
+        }
+
+        ui.separator();
+
+        if ui.button("➕ Add Label").clicked() {
+            state.add_blank_batch_item();
+        }
+
+        if ui.button("📋 Duplicate").clicked() {
+            state.duplicate_batch_item(cur_idx);
+        }
+
+        if total_items > 1 && ui.button("🗑 Delete").clicked() {
+            state.remove_batch_item(cur_idx);
+        }
+
+        ui.separator();
+
+        if ui
+            .button(
+                egui::RichText::new(format!("📋 View All ({total_items}) Labels & Print All"))
+                    .strong()
+                    .color(egui::Color32::from_rgb(22, 101, 52)),
+            )
+            .clicked()
+        {
+            state.view_mode = crate::state::ViewMode::Batch;
+        }
+    });
+
+    ui.add_space(4.0);
+    ui.separator();
+    ui.add_space(4.0);
+
+    // Quick text editor and zoom controls
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new("✏ Text:")
+                .strong()
+                .color(egui::Color32::from_rgb(30, 41, 59)),
+        );
+
+        let target_text_idx = match state.selected_element {
+            Some(idx)
+                if idx < state.elements.len()
+                    && matches!(state.elements[idx], crate::state::LabelElement::Text { .. }) =>
+            {
+                Some(idx)
+            }
+            _ => state
+                .elements
+                .iter()
+                .position(|el| matches!(el, crate::state::LabelElement::Text { .. })),
+        };
+
+        if let Some(idx) = target_text_idx {
+            if let crate::state::LabelElement::Text {
+                ref mut content, ..
+            } = state.elements[idx]
+            {
+                let resp = ui.add(
+                    egui::TextEdit::singleline(content)
+                        .desired_width(260.0)
+                        .hint_text("Type label text here..."),
+                );
+                if resp.changed() {
+                    state.selected_element = Some(idx);
+                    state.mark_dirty();
+                }
+            }
+            if state.elements.len() > 1 {
+                ui.small(
+                    egui::RichText::new(format!(
+                        "(Element {} of {})",
+                        idx + 1,
+                        state.elements.len()
+                    ))
+                    .color(egui::Color32::from_rgb(100, 110, 120)),
+                );
+            }
+        } else {
+            ui.label(
+                egui::RichText::new("(No text on this label)")
+                    .italics()
+                    .color(egui::Color32::GRAY),
+            );
+            if ui.button("➕ Add Text").clicked() {
+                state.elements.push(crate::state::LabelElement::Text {
+                    content: "Label".to_string(),
+                    font_size: None,
+                    align: ptouch_render::text::TextAlign::Center,
+                    rotation: 0.0,
+                    flip_h: false,
+                    flip_v: false,
+                });
+                state.selected_element = Some(state.elements.len() - 1);
+                state.mark_dirty();
+            }
+        }
+
+        ui.separator();
+
         if ui.button("Fit").clicked() {
             state.zoom_fit = true;
         }
@@ -29,8 +186,12 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
             state.zoom_fit = false;
         }
         ui.label(format!("Zoom: {:.0}%", state.zoom * 100.0));
+    });
 
-        ui.separator();
+    ui.add_space(4.0);
+
+    // Tape overview header
+    ui.horizontal(|ui| {
 
         if let Some(ref texture) = state.preview_texture {
             let content_mm = (texture.size_vec2().x / px_per_mm) * copies as f32;
@@ -91,7 +252,8 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
     let canvas_size = canvas_rect.size();
 
     // Fill canvas background with white
-    ui.painter().rect_filled(canvas_rect, 0.0, egui::Color32::WHITE);
+    ui.painter()
+        .rect_filled(canvas_rect, 0.0, egui::Color32::WHITE);
 
     // Intuitive banner explaining the background vs the outlined label box
     let info_text = "(this is the background, the label is in the outlined box)";
@@ -105,7 +267,8 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
         egui::Color32::TRANSPARENT,
     );
     let pill_rect = text_rect.expand2(egui::vec2(10.0, 3.0));
-    ui.painter().rect_filled(pill_rect, 4.0, egui::Color32::from_rgb(243, 246, 250));
+    ui.painter()
+        .rect_filled(pill_rect, 4.0, egui::Color32::from_rgb(243, 246, 250));
     ui.painter().rect_stroke(
         pill_rect,
         4.0,
@@ -166,16 +329,18 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
 
             // Center the entire printed tape in the canvas
             let center = canvas_rect.center();
-            let tape_rect = egui::Rect::from_center_size(
-                center,
-                egui::vec2(display_strip_w, display_tape_h),
-            );
+            let tape_rect =
+                egui::Rect::from_center_size(center, egui::vec2(display_strip_w, display_tape_h));
 
             let painter = ui.painter();
 
             // 1. Draw tape shadow and physical tape body in outlined box
             let shadow_rect = tape_rect.translate(egui::vec2(2.0, 3.0));
-            painter.rect_filled(shadow_rect, 4.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 35));
+            painter.rect_filled(
+                shadow_rect,
+                4.0,
+                egui::Color32::from_rgba_unmultiplied(0, 0, 0, 35),
+            );
             painter.rect_filled(tape_rect, 3.0, egui::Color32::WHITE);
             // Crisp, prominent outline for the printed label box
             painter.rect_stroke(
@@ -192,11 +357,17 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
             if tape_physical_h_px > content_h_px {
                 let guideline_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(230));
                 painter.line_segment(
-                    [egui::pos2(tape_rect.min.x, printable_top), egui::pos2(tape_rect.max.x, printable_top)],
+                    [
+                        egui::pos2(tape_rect.min.x, printable_top),
+                        egui::pos2(tape_rect.max.x, printable_top),
+                    ],
                     guideline_stroke,
                 );
                 painter.line_segment(
-                    [egui::pos2(tape_rect.min.x, printable_bottom), egui::pos2(tape_rect.max.x, printable_bottom)],
+                    [
+                        egui::pos2(tape_rect.min.x, printable_bottom),
+                        egui::pos2(tape_rect.max.x, printable_bottom),
+                    ],
                     guideline_stroke,
                 );
             }
@@ -319,7 +490,14 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                     cur_x += lead_w;
 
                     // Pretrim cut marker
-                    draw_cut_marker(painter, cur_x, y_top, y_bottom, "✂ PRETRIM CUT (Scrap cut)", true);
+                    draw_cut_marker(
+                        painter,
+                        cur_x,
+                        y_top,
+                        y_bottom,
+                        "✂ PRETRIM CUT (Scrap cut)",
+                        true,
+                    );
 
                     let finished_label_start = cur_x;
 
@@ -350,7 +528,8 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                     }
 
                     // Dimension of the finished label
-                    let finished_label_mm = (single_content_mm * copies as f32) + (margin_mm * 2.0 * copies as f32);
+                    let finished_label_mm =
+                        (single_content_mm * copies as f32) + (margin_mm * 2.0 * copies as f32);
                     draw_dimension(
                         painter,
                         finished_label_start,
@@ -394,7 +573,10 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
                         tape_rect.min.x,
                         cur_x,
                         ruler_y,
-                        &format!("{:.1} mm (Chain)", single_content_mm * copies as f32 + (margin_mm * 2.0 * copies as f32)),
+                        &format!(
+                            "{:.1} mm (Chain)",
+                            single_content_mm * copies as f32 + (margin_mm * 2.0 * copies as f32)
+                        ),
                         egui::Color32::from_rgb(0, 160, 90),
                     );
 
@@ -502,13 +684,7 @@ fn draw_cut_marker(
     );
 }
 
-fn draw_no_cut_marker(
-    painter: &egui::Painter,
-    x: f32,
-    y_top: f32,
-    y_bottom: f32,
-    label: &str,
-) {
+fn draw_no_cut_marker(painter: &egui::Painter, x: f32, y_top: f32, y_bottom: f32, label: &str) {
     let color = egui::Color32::from_rgb(50, 130, 220); // Blue
     let stroke = egui::Stroke::new(1.0, color);
 
@@ -534,12 +710,7 @@ fn draw_no_cut_marker(
     );
 }
 
-fn draw_continuous_indicator(
-    painter: &egui::Painter,
-    x: f32,
-    y_top: f32,
-    y_bottom: f32,
-) {
+fn draw_continuous_indicator(painter: &egui::Painter, x: f32, y_top: f32, y_bottom: f32) {
     let color = egui::Color32::from_rgb(0, 160, 90); // Green
     let font_id = egui::FontId::proportional(11.0);
     let label = "➔ CONTINUOUS (NO CUT)";
@@ -580,8 +751,14 @@ fn draw_dimension(
     }
     let stroke = egui::Stroke::new(1.0, color);
     painter.line_segment([egui::pos2(x_start, y), egui::pos2(x_end, y)], stroke);
-    painter.line_segment([egui::pos2(x_start, y - 3.0), egui::pos2(x_start, y + 3.0)], stroke);
-    painter.line_segment([egui::pos2(x_end, y - 3.0), egui::pos2(x_end, y + 3.0)], stroke);
+    painter.line_segment(
+        [egui::pos2(x_start, y - 3.0), egui::pos2(x_start, y + 3.0)],
+        stroke,
+    );
+    painter.line_segment(
+        [egui::pos2(x_end, y - 3.0), egui::pos2(x_end, y + 3.0)],
+        stroke,
+    );
     painter.text(
         egui::pos2((x_start + x_end) / 2.0, y - 4.0),
         egui::Align2::CENTER_BOTTOM,

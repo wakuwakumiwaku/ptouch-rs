@@ -108,9 +108,12 @@ fn show_tape_section(ui: &mut egui::Ui, state: &mut AppState) {
         if let Some(total_m) = state.cartridge_total_length_m {
             let remaining = (total_m - state.tape_printed_meters).max(0.0);
             ui.label(
-                egui::RichText::new(format!("Cartridge: {:.2}m rem / {:.1}m", remaining, total_m))
-                    .small()
-                    .color(ui.visuals().weak_text_color()),
+                egui::RichText::new(format!(
+                    "Cartridge: {:.2}m rem / {:.1}m",
+                    remaining, total_m
+                ))
+                .small()
+                .color(ui.visuals().weak_text_color()),
             );
         }
     });
@@ -177,9 +180,11 @@ fn show_print_options(ui: &mut egui::Ui, state: &mut AppState) {
         if state.cut_mode == CutMarginMode::CenteredFull {
             ui.add_space(2.0);
             ui.label(
-                egui::RichText::new("ℹ Symmetrical 27.0 mm margins on both sides (24.5 mm lead + 2.5 mm safety)")
-                    .small()
-                    .color(egui::Color32::from_rgb(100, 115, 130)),
+                egui::RichText::new(
+                    "ℹ Symmetrical 27.0 mm margins on both sides (24.5 mm lead + 2.5 mm safety)",
+                )
+                .small()
+                .color(egui::Color32::from_rgb(100, 115, 130)),
             );
         }
 
@@ -279,6 +284,13 @@ fn show_elements_section(ui: &mut egui::Ui, state: &mut AppState) {
         ui.horizontal(|ui| {
             if ui.selectable_label(is_selected, &label).clicked() {
                 state.selected_element = Some(idx);
+            }
+            if ui
+                .small_button("🗑")
+                .on_hover_text("Delete this element")
+                .clicked()
+            {
+                action = Some(ElementAction::Delete(idx));
             }
         });
     }

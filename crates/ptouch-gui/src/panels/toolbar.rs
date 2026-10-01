@@ -11,13 +11,43 @@ use ptouch_render::document::LabelDocument;
 use ptouch_render::raster;
 use ptouch_render::text::TextAlign;
 
-use crate::state::{AppState, LabelElement, PrinterCommand};
+use crate::state::{AppState, LabelElement, PrinterCommand, ViewMode};
 
 /// Render the top toolbar.
 pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
+    state.ensure_batch_initialized();
+
     ui.horizontal(|ui| {
-        // -- Element addition buttons --
-        if ui.button("Add Text").clicked() {
+        // -- View mode switcher --
+        let batch_count = state.batch_items.len().max(1);
+        let view_label = match state.view_mode {
+            ViewMode::Designer => format!("📋 View All Labels ({batch_count})"),
+            ViewMode::Batch => "✏ Switch to Designer Canvas".to_string(),
+        };
+        let view_btn = egui::Button::new(egui::RichText::new(view_label).strong().color(
+            if state.view_mode == ViewMode::Batch {
+                egui::Color32::from_rgb(30, 64, 175)
+            } else {
+                egui::Color32::from_rgb(20, 110, 40)
+            },
+        ));
+        if ui.add(view_btn).clicked() {
+            state.sync_active_to_batch();
+            state.view_mode = match state.view_mode {
+                ViewMode::Designer => ViewMode::Batch,
+                ViewMode::Batch => ViewMode::Designer,
+            };
+        }
+
+        ui.separator();
+
+        // -- Element addition buttons (enabled in Designer mode) --
+        let in_designer = state.view_mode == ViewMode::Designer;
+
+        if ui
+            .add_enabled(in_designer, egui::Button::new("Add Text"))
+            .clicked()
+        {
             state.elements.push(LabelElement::Text {
                 content: "Label".to_string(),
                 font_size: None,
@@ -31,7 +61,9 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
             info!("Added text element");
         }
 
-        if ui.button("Add Image").clicked()
+        if ui
+            .add_enabled(in_designer, egui::Button::new("Add Image"))
+            .clicked()
             && let Some(path) = crate::widgets::pick_image_file()
         {
             // Read the original source bytes so the image is embedded in the
@@ -58,14 +90,20 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
             }
         }
 
-        if ui.button("Cut Mark").clicked() {
+        if ui
+            .add_enabled(in_designer, egui::Button::new("Cut Mark"))
+            .clicked()
+        {
             state.elements.push(LabelElement::CutMark);
             state.selected_element = Some(state.elements.len() - 1);
             state.mark_dirty();
             info!("Added cut mark");
         }
 
-        if ui.button("Padding").clicked() {
+        if ui
+            .add_enabled(in_designer, egui::Button::new("Padding"))
+            .clicked()
+        {
             state.elements.push(LabelElement::Padding { pixels: 20 });
             state.selected_element = Some(state.elements.len() - 1);
             state.mark_dirty();
@@ -79,13 +117,18 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
         let busy = state.is_printer_busy();
         let has_bitmap = state.preview_bitmap.is_some() && !state.needs_rerender;
 
+        // Print active label
         if ui
             .add_enabled(connected && !busy && has_bitmap, egui::Button::new("Print"))
             .clicked()
             && let Some(ref bitmap) = state.preview_bitmap
         {
             let raw_lines = raster::bitmap_to_raster_lines(bitmap, state.printer_max_px);
-            let dpi = if state.printer_dpi > 0 { state.printer_dpi as f32 } else { 180.0 };
+            let dpi = if state.printer_dpi > 0 {
+                state.printer_dpi as f32
+            } else {
+                180.0
+            };
             let px_per_mm = dpi / 25.4;
             let copies = state.copies.max(1);
 
@@ -93,10 +136,6 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
 
             let (raster_lines, chain_print, precut) = match state.cut_mode {
                 crate::state::CutMarginMode::CenteredFull => {
-                    // Left side physically has the hardware lead (~24.5mm) + 2.5mm prelabel safety margin
-                    // to prevent the first letters from getting cut off (total left margin: 27.0mm).
-                    // Trailing margin matching the exact same 27.0mm is fed after the text,
-                    // so the final cut produces an identically centered label with matching white blank space.
                     let prelabel_mm: f32 = 2.5;
                     let lead_mm: f32 = 24.5;
                     let total_margin_mm: f32 = lead_mm + prelabel_mm; // 27.0 mm
@@ -104,28 +143,27 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
                     let leading_lines = (prelabel_mm * px_per_mm).round() as usize;
                     let trailing_lines = (total_margin_mm * px_per_mm).round() as usize;
 
-                    let mut lines = Vec::with_capacity(leading_lines + raw_lines.len() + trailing_lines);
-                    lines.extend(std::iter::repeat(blank_line.clone()).take(leading_lines));
+                    let mut lines =
+                        Vec::with_capacity(leading_lines + raw_lines.len() + trailing_lines);
+                    lines.extend(std::iter::repeat_n(blank_line.clone(), leading_lines));
                     lines.extend(raw_lines);
-                    lines.extend(std::iter::repeat(blank_line).take(trailing_lines));
+                    lines.extend(std::iter::repeat_n(blank_line, trailing_lines));
                     (lines, false, false)
                 }
                 crate::state::CutMarginMode::PretrimCut => {
-                    // Pre-cut trims the 24.5 mm scrap first.
-                    // Add safe margins (default 3mm) so text is never cut off.
                     let margin_lines = (state.small_margin_mm * px_per_mm).round() as usize;
                     let mut lines = Vec::with_capacity(margin_lines * 2 + raw_lines.len());
-                    lines.extend(std::iter::repeat(blank_line.clone()).take(margin_lines));
+                    lines.extend(std::iter::repeat_n(blank_line.clone(), margin_lines));
                     lines.extend(raw_lines);
-                    lines.extend(std::iter::repeat(blank_line).take(margin_lines));
+                    lines.extend(std::iter::repeat_n(blank_line, margin_lines));
                     (lines, false, true)
                 }
                 crate::state::CutMarginMode::ChainPrint => {
                     let margin_lines = (2.0 * px_per_mm).round() as usize;
                     let mut lines = Vec::with_capacity(margin_lines * 2 + raw_lines.len());
-                    lines.extend(std::iter::repeat(blank_line.clone()).take(margin_lines));
+                    lines.extend(std::iter::repeat_n(blank_line.clone(), margin_lines));
                     lines.extend(raw_lines);
-                    lines.extend(std::iter::repeat(blank_line).take(margin_lines));
+                    lines.extend(std::iter::repeat_n(blank_line, margin_lines));
                     (lines, true, false)
                 }
             };
@@ -154,6 +192,22 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
                 } else {
                     "Printing...".to_string()
                 };
+            }
+        }
+
+        // Print All (Batch) button
+        let total_prints = state.total_batch_prints();
+        if total_prints > 1 || state.batch_items.len() > 1 {
+            let batch_btn = egui::Button::new(
+                egui::RichText::new(format!("🖨 Print All ({total_prints})"))
+                    .strong()
+                    .color(egui::Color32::from_rgb(22, 101, 52)),
+            );
+            if ui
+                .add_enabled(connected && !busy && total_prints > 0, batch_btn)
+                .clicked()
+            {
+                do_batch_print(state);
             }
         }
 
@@ -193,7 +247,119 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
         if ui.button("Open Layout").clicked() {
             do_open_layout(state);
         }
+
+        if ui.button("Save Batch").clicked() {
+            crate::panels::batch_panel::do_save_batch(state);
+        }
+
+        if ui.button("Open Batch").clicked() {
+            crate::panels::batch_panel::do_open_batch(state);
+        }
     });
+}
+
+/// Print all labels in the batch project with their individual NUMBER TO PRINT counts.
+pub fn do_batch_print(state: &mut AppState) {
+    state.sync_active_to_batch();
+
+    let total_prints = state.total_batch_prints();
+    if total_prints == 0 {
+        state.status_message = "No labels to print (all copies set to 0)".to_string();
+        return;
+    }
+
+    let dpi = if state.printer_dpi > 0 {
+        state.printer_dpi as f32
+    } else {
+        180.0
+    };
+    let px_per_mm = dpi / 25.4;
+    let blank_line = vec![0u8; (state.printer_max_px as usize).div_ceil(8)];
+
+    let mut all_labels_raster: Vec<Vec<Vec<u8>>> = Vec::new();
+    let mut total_mm = 0.0f32;
+
+    let mut renderer = ptouch_render::text::TextRenderer::new();
+
+    for item in &state.batch_items {
+        if item.copies == 0 {
+            continue;
+        }
+
+        let result = ptouch_render::document::render_elements(
+            &item.document.elements,
+            state.tape_width_px,
+            &item.document.font_name,
+            item.document.font_margin,
+            &mut renderer,
+        );
+
+        let bitmap = match result {
+            Ok(Some(bmp)) => bmp.mirrored(item.document.flip_h, item.document.flip_v),
+            _ => continue,
+        };
+
+        let raw_lines = raster::bitmap_to_raster_lines(&bitmap, state.printer_max_px);
+
+        let lines = match state.cut_mode {
+            crate::state::CutMarginMode::CenteredFull => {
+                let prelabel_mm: f32 = 2.5;
+                let lead_mm: f32 = 24.5;
+                let total_margin_mm: f32 = lead_mm + prelabel_mm; // 27.0 mm
+
+                let leading_lines = (prelabel_mm * px_per_mm).round() as usize;
+                let trailing_lines = (total_margin_mm * px_per_mm).round() as usize;
+
+                let mut l = Vec::with_capacity(leading_lines + raw_lines.len() + trailing_lines);
+                l.extend(std::iter::repeat_n(blank_line.clone(), leading_lines));
+                l.extend(raw_lines);
+                l.extend(std::iter::repeat_n(blank_line.clone(), trailing_lines));
+                l
+            }
+            crate::state::CutMarginMode::PretrimCut => {
+                let margin_lines = (state.small_margin_mm * px_per_mm).round() as usize;
+                let mut l = Vec::with_capacity(margin_lines * 2 + raw_lines.len());
+                l.extend(std::iter::repeat_n(blank_line.clone(), margin_lines));
+                l.extend(raw_lines);
+                l.extend(std::iter::repeat_n(blank_line.clone(), margin_lines));
+                l
+            }
+            crate::state::CutMarginMode::ChainPrint => {
+                let margin_lines = (2.0 * px_per_mm).round() as usize;
+                let mut l = Vec::with_capacity(margin_lines * 2 + raw_lines.len());
+                l.extend(std::iter::repeat_n(blank_line.clone(), margin_lines));
+                l.extend(raw_lines);
+                l.extend(std::iter::repeat_n(blank_line.clone(), margin_lines));
+                l
+            }
+        };
+
+        let label_mm = (lines.len() as f32) / px_per_mm;
+        for _ in 0..item.copies {
+            all_labels_raster.push(lines.clone());
+            total_mm += label_mm;
+        }
+    }
+
+    if all_labels_raster.is_empty() {
+        state.status_message = "No renderable labels to print".to_string();
+        return;
+    }
+
+    state.tape_printed_meters += total_mm / 1000.0;
+
+    let precut_first = matches!(state.cut_mode, crate::state::CutMarginMode::PretrimCut);
+
+    if let Some(ref tx) = state.printer_cmd_tx {
+        let _ = tx.send(PrinterCommand::PrintBatch {
+            labels: all_labels_raster,
+            precut_first,
+            quality: state.print_quality,
+            target: state.printer_target.clone(),
+        });
+        state.operation_in_progress = true;
+        state.status_message = format!("Printing batch of {total_prints} labels...");
+    }
 }
 
 /// Save the current design to a `.ptl` layout file (TOML with embedded images).
@@ -280,7 +446,11 @@ pub(crate) fn apply_layout(state: &mut AppState, document: LabelDocument) {
     state.overall_flip_h = document.flip_h;
     state.overall_flip_v = document.flip_v;
     state.elements = document.elements;
-    state.selected_element = None;
+    state.selected_element = if state.elements.is_empty() {
+        None
+    } else {
+        Some(0)
+    };
     state.mark_dirty();
 }
 
@@ -324,7 +494,7 @@ mod tests {
             version: ptouch_render::document::DOCUMENT_VERSION,
             tape_width_mm,
             dpi: 180,
-            font_name: "DejaVuSans".into(),
+            font_name: "Inter".into(),
             font_margin: 0,
             flip_h: false,
             flip_v: false,

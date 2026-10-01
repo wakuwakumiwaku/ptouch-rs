@@ -56,6 +56,22 @@ pub fn printer_worker(
                     quality,
                 );
             }
+            Ok(PrinterCommand::PrintBatch {
+                labels,
+                precut_first,
+                quality,
+                target,
+            }) => {
+                current_target = target;
+                do_print_batch(
+                    &current_target,
+                    &resp_tx,
+                    &ctx,
+                    labels,
+                    precut_first,
+                    quality,
+                );
+            }
             Ok(PrinterCommand::FeedAndCut(target)) => {
                 current_target = target;
                 do_feed_and_cut(&current_target, &resp_tx, &ctx);
@@ -173,6 +189,7 @@ fn parse_bluetooth_status(output: &str) -> Result<PrinterResponse, String> {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn do_print(
     target: &PrinterTarget,
     tx: &mpsc::Sender<PrinterEvent>,
@@ -215,6 +232,81 @@ fn print_usb(
         let precut_this_copy = if is_first { precut } else { false };
         dev.print_raster(raster_lines, chain_this_copy, precut_this_copy, quality)
             .map_err(|e| format!("Print error (copy {copy}/{copies}): {e}"))?;
+    }
+    let _ = dev.close();
+    Ok(())
+}
+
+fn do_print_batch(
+    target: &PrinterTarget,
+    tx: &mpsc::Sender<PrinterEvent>,
+    ctx: &egui::Context,
+    labels: Vec<Vec<Vec<u8>>>,
+    precut_first: bool,
+    quality: PrintQuality,
+) {
+    let result = match target {
+        PrinterTarget::Usb => print_usb_batch(&labels, precut_first, quality, tx, target, ctx),
+        #[cfg(any(target_os = "macos", test))]
+        PrinterTarget::Bluetooth { address, .. } => {
+            let total = labels.len();
+            let mut err = None;
+            for (i, lines) in labels.iter().enumerate() {
+                if let Err(e) = print_bluetooth(address, lines) {
+                    err = Some(e);
+                    break;
+                }
+                let _ = tx.send(PrinterEvent {
+                    target: Some(target.clone()),
+                    response: PrinterResponse::BatchProgress {
+                        current: (i + 1) as u32,
+                        total: total as u32,
+                    },
+                });
+                ctx.request_repaint();
+            }
+            err.map_or(Ok(()), Err)
+        }
+    };
+    let response = result
+        .map(|()| PrinterResponse::PrintDone)
+        .unwrap_or_else(PrinterResponse::Error);
+    let _ = tx.send(PrinterEvent {
+        target: Some(target.clone()),
+        response,
+    });
+    ctx.request_repaint();
+}
+
+fn print_usb_batch(
+    labels: &[Vec<Vec<u8>>],
+    precut_first: bool,
+    quality: PrintQuality,
+    tx: &mpsc::Sender<PrinterEvent>,
+    target: &PrinterTarget,
+    ctx: &egui::Context,
+) -> Result<(), String> {
+    if labels.is_empty() {
+        return Ok(());
+    }
+    let mut dev = PtouchDevice::open_first().map_err(|e| format!("Connect error: {e}"))?;
+    dev.init().map_err(|e| format!("Init error: {e}"))?;
+    let total = labels.len();
+    for (i, label_lines) in labels.iter().enumerate() {
+        let is_first = i == 0;
+        let is_last = i == total - 1;
+        let precut = is_first && precut_first;
+        let chain = !is_last;
+        dev.print_raster(label_lines, chain, precut, quality)
+            .map_err(|e| format!("Print error on label {}/{}: {}", i + 1, total, e))?;
+        let _ = tx.send(PrinterEvent {
+            target: Some(target.clone()),
+            response: PrinterResponse::BatchProgress {
+                current: (i + 1) as u32,
+                total: total as u32,
+            },
+        });
+        ctx.request_repaint();
     }
     let _ = dev.close();
     Ok(())
