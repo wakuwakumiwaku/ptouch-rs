@@ -203,61 +203,150 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
             state.zoom_fit = false;
         }
         ui.label(format!("Zoom: {:.0}%", state.zoom * 100.0));
+
+        ui.separator();
+
+        // Quick Margin & Auto Pre-trim selector
+        ui.label(
+            egui::RichText::new("📏 Margin:")
+                .strong()
+                .color(egui::Color32::from_rgb(30, 41, 59)),
+        );
+
+        let is_pretrim = state.margin_mm.map(|m| m < 24.5).unwrap_or(false);
+        let cur_margin = state.margin_mm.unwrap_or(27.0);
+
+        let is_centered = state.margin_mm.is_none() || state.margin_mm == Some(27.0);
+        if ui
+            .selectable_label(is_centered, "Centered (~27mm)")
+            .clicked()
+        {
+            state.margin_mm = None;
+            state.cut_mode = CutMarginMode::CenteredFull;
+            state.sync_active_to_batch();
+            state.mark_dirty();
+        }
+
+        let is_3mm = state.margin_mm == Some(3.0);
+        if ui.selectable_label(is_3mm, "✂ 3mm").clicked() {
+            state.margin_mm = Some(3.0);
+            state.cut_mode = CutMarginMode::PretrimCut;
+            state.small_margin_mm = 3.0;
+            state.sync_active_to_batch();
+            state.mark_dirty();
+        }
+
+        let is_5mm = state.margin_mm == Some(5.0);
+        if ui.selectable_label(is_5mm, "✂ 5mm").clicked() {
+            state.margin_mm = Some(5.0);
+            state.cut_mode = CutMarginMode::PretrimCut;
+            state.small_margin_mm = 5.0;
+            state.sync_active_to_batch();
+            state.mark_dirty();
+        }
+
+        let mut custom_val = cur_margin;
+        let drag_resp = ui.add(
+            egui::DragValue::new(&mut custom_val)
+                .range(1.5..=100.0)
+                .speed(0.5)
+                .suffix(" mm"),
+        );
+        if drag_resp.changed() {
+            if (custom_val - 27.0).abs() < 0.1 {
+                state.margin_mm = None;
+                state.cut_mode = CutMarginMode::CenteredFull;
+            } else {
+                state.margin_mm = Some(custom_val);
+                if custom_val < 24.5 {
+                    state.cut_mode = CutMarginMode::PretrimCut;
+                    state.small_margin_mm = custom_val;
+                } else {
+                    state.cut_mode = CutMarginMode::CenteredFull;
+                }
+            }
+            state.sync_active_to_batch();
+            state.mark_dirty();
+        }
+
+        if is_pretrim {
+            ui.label(
+                egui::RichText::new(format!(
+                    "✂ Auto Pre-trim ({:.1} mm • 24.5 mm scrap)",
+                    cur_margin
+                ))
+                .small()
+                .strong()
+                .color(egui::Color32::from_rgb(194, 65, 12)),
+            )
+            .on_hover_text(
+                "Margin is < 24.5 mm (tighter than printer head distance).\n\
+                 The printer will automatically pre-trim the 24.5 mm scrap snippet\n\
+                 so your label has tight, professional margins.",
+            );
+        } else {
+            ui.label(
+                egui::RichText::new(format!("📏 Full Lead ({:.1} mm • 0 mm scrap)", cur_margin))
+                    .small()
+                    .strong()
+                    .color(egui::Color32::from_rgb(22, 101, 52)),
+            )
+            .on_hover_text(
+                "Margin is ≥ 24.5 mm.\n\
+                 Leading margin uses the printer's natural 24.5 mm hardware lead.\n\
+                 Zero scrap snippets produced!",
+            );
+        }
     });
 
     ui.add_space(4.0);
 
     // Tape overview header
     ui.horizontal(|ui| {
-
         if let Some(ref texture) = state.preview_texture {
             let content_mm = (texture.size_vec2().x / px_per_mm) * copies as f32;
             let lead_mm: f32 = 24.5;
-            let prelabel_safety_mm: f32 = 2.5;
-            let centered_margin_mm: f32 = lead_mm + prelabel_safety_mm; // 27.0 mm
+            let is_pretrim = state.margin_mm.map(|m| m < 24.5).unwrap_or(false);
+            let margin_mm = state.margin_mm.unwrap_or(27.0);
 
-            match state.cut_mode {
-                CutMarginMode::CenteredFull => {
-                    let total_tape_mm = centered_margin_mm + content_mm + centered_margin_mm;
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "Label Length: {:.1} mm (Centered: {:.1}mm left + {:.1}mm text + {:.1}mm right)",
-                            total_tape_mm, centered_margin_mm, content_mm, centered_margin_mm
-                        ))
+            if state.cut_mode == CutMarginMode::ChainPrint {
+                ui.label(
+                    egui::RichText::new(format!("Chain Length: {:.1} mm", content_mm))
                         .strong(),
-                    );
-                    ui.separator();
-                    ui.label(
-                        egui::RichText::new("✂ Cuts: 1 (Final Cut • Same Blank Space Both Sides • 0 Scrap)")
-                            .color(egui::Color32::from_rgb(40, 100, 200)),
-                    );
-                }
-                CutMarginMode::PretrimCut => {
-                    let finished_label_mm = content_mm + (state.small_margin_mm * 2.0 * copies as f32);
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "Finished Label: {:.1} mm  [+ {:.1} mm Pretrim Scrap]",
-                            finished_label_mm, lead_mm
-                        ))
-                        .strong(),
-                    );
-                    ui.separator();
-                    ui.label(
-                        egui::RichText::new("✂ Cuts: 2 (Pretrim Cut + Final Cut)")
-                            .color(egui::Color32::from_rgb(230, 50, 50)),
-                    );
-                }
-                CutMarginMode::ChainPrint => {
-                    ui.label(
-                        egui::RichText::new(format!("Chain Length: {:.1} mm", content_mm))
-                            .strong(),
-                    );
-                    ui.separator();
-                    ui.label(
-                        egui::RichText::new("✂ Cuts: 0 (Continuous Chain • No Cut)")
-                            .color(egui::Color32::from_rgb(0, 160, 90)),
-                    );
-                }
+                );
+                ui.separator();
+                ui.label(
+                    egui::RichText::new("✂ Cuts: 0 (Continuous Chain • No Cut)")
+                        .color(egui::Color32::from_rgb(0, 160, 90)),
+                );
+            } else if is_pretrim {
+                let finished_label_mm = content_mm + (margin_mm * 2.0 * copies as f32);
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Finished Label: {:.1} mm (compact: {:.1}mm margins)  [+ {:.1} mm Pretrim Scrap]",
+                        finished_label_mm, margin_mm, lead_mm
+                    ))
+                    .strong(),
+                );
+                ui.separator();
+                ui.label(
+                    egui::RichText::new("✂ Cuts: 2 (Pretrim Cut + Final Cut)")
+                        .color(egui::Color32::from_rgb(230, 50, 50)),
+                );
+            } else {
+                let total_tape_mm = margin_mm + content_mm + margin_mm;
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Label Length: {:.1} mm (Centered: {:.1}mm left + {:.1}mm text + {:.1}mm right)",
+                        total_tape_mm, margin_mm, content_mm, margin_mm
+                    ))
+                    .strong(),
+                );
+                ui.separator();
+                ui.label(
+                    egui::RichText::new("✂ Cuts: 1 (Final Cut • Same Blank Space Both Sides • 0 Scrap)")
+                        .color(egui::Color32::from_rgb(40, 100, 200)),
+                );
             }
         }
     });
@@ -308,24 +397,19 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
             let tape_physical_h_px = (state.tape_width_mm as f32 * px_per_mm).max(content_h_px);
 
             let lead_mm: f32 = 24.5;
-            let prelabel_safety_mm: f32 = 2.5;
-            let centered_margin_mm: f32 = lead_mm + prelabel_safety_mm; // 27.0 mm
-            let centered_margin_px = (centered_margin_mm * px_per_mm).round();
+            let is_pretrim = state.margin_mm.map(|m| m < 24.5).unwrap_or(false);
+            let margin_mm = state.margin_mm.unwrap_or(27.0);
+            let margin_px = (margin_mm * px_per_mm).round();
             let lead_w_px = (lead_mm * px_per_mm).round();
 
             // Total strip width in printer pixels (unscaled)
-            let total_strip_w_px = match state.cut_mode {
-                CutMarginMode::CenteredFull => {
-                    centered_margin_px + (content_w_px * copies as f32) + centered_margin_px
-                }
-                CutMarginMode::PretrimCut => {
-                    let margin_px = (state.small_margin_mm * px_per_mm).round();
-                    lead_w_px + ((margin_px + content_w_px + margin_px) * copies as f32)
-                }
-                CutMarginMode::ChainPrint => {
-                    let margin_px = (2.0 * px_per_mm).round();
-                    (margin_px + content_w_px + margin_px) * copies as f32
-                }
+            let total_strip_w_px = if state.cut_mode == CutMarginMode::ChainPrint {
+                let chain_margin_px = (2.0 * px_per_mm).round();
+                (chain_margin_px + content_w_px + chain_margin_px) * copies as f32
+            } else if is_pretrim {
+                lead_w_px + ((margin_px + content_w_px + margin_px) * copies as f32)
+            } else {
+                margin_px + (content_w_px * copies as f32) + margin_px
             };
 
             // Calculate zoom
@@ -397,208 +481,203 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
             let single_content_w = content_w_px * zoom;
             let single_content_mm = content_w_px / px_per_mm;
 
-            match state.cut_mode {
-                CutMarginMode::CenteredFull => {
-                    let margin_w = centered_margin_px * zoom;
+            if state.cut_mode == CutMarginMode::ChainPrint {
+                let margin_mm = 2.0;
+                let margin_w = (margin_mm * px_per_mm).round() * zoom;
 
-                    // Leading blank margin (24.5 mm hardware lead + 2.5 mm safety)
-                    let lead_rect = egui::Rect::from_min_max(
-                        egui::pos2(cur_x, y_top),
-                        egui::pos2(cur_x + margin_w, y_bottom),
-                    );
-                    painter.rect_filled(lead_rect, 0.0, egui::Color32::from_gray(248));
-                    painter.text(
-                        lead_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        format!("{:.1} mm Blank Margin", centered_margin_mm),
-                        egui::FontId::proportional(11.0),
-                        egui::Color32::from_gray(130),
-                    );
-                    draw_dimension(
-                        painter,
-                        cur_x,
-                        cur_x + margin_w,
-                        ruler_y,
-                        &format!("{:.1} mm (Margin)", centered_margin_mm),
-                        egui::Color32::from_rgb(60, 140, 220),
-                    );
+                for copy_idx in 0..copies {
                     cur_x += margin_w;
 
-                    // Content copies (centered)
-                    for copy_idx in 0..copies {
-                        let copy_start_x = cur_x;
-                        let copy_rect = egui::Rect::from_min_size(
-                            egui::pos2(copy_start_x, printable_top),
-                            egui::vec2(single_content_w, printable_h),
-                        );
-                        painter.image(
-                            texture.id(),
-                            copy_rect,
-                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                            egui::Color32::WHITE,
-                        );
-                        draw_dimension(
-                            painter,
-                            copy_start_x,
-                            copy_start_x + single_content_w,
-                            ruler_y,
-                            &format!("{:.1} mm (Content)", single_content_mm),
-                            egui::Color32::from_rgb(40, 100, 200),
-                        );
-                        cur_x += single_content_w;
-
-                        if copies > 1 && copy_idx + 1 < copies {
-                            draw_no_cut_marker(painter, cur_x, y_top, y_bottom, "⛓ Chained (0 mm)");
-                        }
-                    }
-
-                    // Trailing blank margin (identical 27.0 mm matching left side)
-                    let trail_rect = egui::Rect::from_min_max(
-                        egui::pos2(cur_x, y_top),
-                        egui::pos2(cur_x + margin_w, y_bottom),
+                    let copy_start_x = cur_x;
+                    let copy_rect = egui::Rect::from_min_size(
+                        egui::pos2(copy_start_x, printable_top),
+                        egui::vec2(single_content_w, printable_h),
                     );
-                    painter.rect_filled(trail_rect, 0.0, egui::Color32::from_gray(248));
-                    painter.text(
-                        trail_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        format!("{:.1} mm Blank Margin", centered_margin_mm),
-                        egui::FontId::proportional(11.0),
-                        egui::Color32::from_gray(130),
+                    painter.image(
+                        texture.id(),
+                        copy_rect,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        egui::Color32::WHITE,
                     );
-                    draw_dimension(
-                        painter,
-                        cur_x,
-                        cur_x + margin_w,
-                        ruler_y,
-                        &format!("{:.1} mm (Margin)", centered_margin_mm),
-                        egui::Color32::from_rgb(60, 140, 220),
-                    );
+                    cur_x += single_content_w;
                     cur_x += margin_w;
 
-                    // Single Final Cut at the end
-                    draw_cut_marker(painter, cur_x, y_top, y_bottom, "✂ FINAL CUT", true);
-                }
-                CutMarginMode::PretrimCut => {
-                    let lead_w = lead_w_px * zoom;
-                    let margin_mm = state.small_margin_mm;
-                    let margin_w = (margin_mm * px_per_mm).round() * zoom;
-
-                    // 1. Scrap Snippet area (to be pre-trimmed)
-                    let scrap_rect = egui::Rect::from_min_max(
-                        egui::pos2(cur_x, y_top),
-                        egui::pos2(cur_x + lead_w, y_bottom),
-                    );
-                    painter.rect_filled(scrap_rect, 0.0, egui::Color32::from_rgb(255, 235, 235));
-                    painter.text(
-                        scrap_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        "Scrap Snippet (24.5 mm)",
-                        egui::FontId::proportional(11.0),
-                        egui::Color32::from_rgb(190, 40, 40),
-                    );
-                    draw_dimension(
-                        painter,
-                        cur_x,
-                        cur_x + lead_w,
-                        ruler_y,
-                        &format!("{:.1} mm (Waste Scrap)", lead_mm),
-                        egui::Color32::from_rgb(210, 40, 40),
-                    );
-                    cur_x += lead_w;
-
-                    // Pretrim cut marker
-                    draw_cut_marker(
-                        painter,
-                        cur_x,
-                        y_top,
-                        y_bottom,
-                        "✂ PRETRIM CUT (Scrap cut)",
-                        true,
-                    );
-
-                    let finished_label_start = cur_x;
-
-                    // 2. Finished label copies
-                    for copy_idx in 0..copies {
-                        // Leading safe margin
-                        cur_x += margin_w;
-
-                        let copy_start_x = cur_x;
-                        let copy_rect = egui::Rect::from_min_size(
-                            egui::pos2(copy_start_x, printable_top),
-                            egui::vec2(single_content_w, printable_h),
-                        );
-                        painter.image(
-                            texture.id(),
-                            copy_rect,
-                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                            egui::Color32::WHITE,
-                        );
-                        cur_x += single_content_w;
-
-                        // Trailing safe margin
-                        cur_x += margin_w;
-
-                        if copies > 1 && copy_idx + 1 < copies {
-                            draw_no_cut_marker(painter, cur_x, y_top, y_bottom, "⛓ Chained (0 mm)");
-                        }
+                    if copies > 1 && copy_idx + 1 < copies {
+                        draw_no_cut_marker(painter, cur_x, y_top, y_bottom, "⛓ Chained (0 mm)");
                     }
-
-                    // Dimension of the finished label
-                    let finished_label_mm =
-                        (single_content_mm * copies as f32) + (margin_mm * 2.0 * copies as f32);
-                    draw_dimension(
-                        painter,
-                        finished_label_start,
-                        cur_x,
-                        ruler_y,
-                        &format!("{:.1} mm (Finished Label)", finished_label_mm),
-                        egui::Color32::from_rgb(40, 120, 220),
-                    );
-
-                    // Final cut marker
-                    draw_cut_marker(painter, cur_x, y_top, y_bottom, "✂ FINAL CUT", true);
                 }
-                CutMarginMode::ChainPrint => {
-                    let margin_mm = 2.0;
-                    let margin_w = (margin_mm * px_per_mm).round() * zoom;
 
-                    for copy_idx in 0..copies {
-                        cur_x += margin_w;
+                draw_dimension(
+                    painter,
+                    tape_rect.min.x,
+                    cur_x,
+                    ruler_y,
+                    &format!(
+                        "{:.1} mm (Chain)",
+                        single_content_mm * copies as f32 + (margin_mm * 2.0 * copies as f32)
+                    ),
+                    egui::Color32::from_rgb(0, 160, 90),
+                );
 
-                        let copy_start_x = cur_x;
-                        let copy_rect = egui::Rect::from_min_size(
-                            egui::pos2(copy_start_x, printable_top),
-                            egui::vec2(single_content_w, printable_h),
-                        );
-                        painter.image(
-                            texture.id(),
-                            copy_rect,
-                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                            egui::Color32::WHITE,
-                        );
-                        cur_x += single_content_w;
-                        cur_x += margin_w;
+                draw_continuous_indicator(painter, cur_x, y_top, y_bottom);
+            } else if is_pretrim {
+                let lead_w = lead_w_px * zoom;
+                let margin_w = (margin_mm * px_per_mm).round() * zoom;
 
-                        if copies > 1 && copy_idx + 1 < copies {
-                            draw_no_cut_marker(painter, cur_x, y_top, y_bottom, "⛓ Chained (0 mm)");
-                        }
+                // 1. Scrap Snippet area (automatically pre-trimmed)
+                let scrap_rect = egui::Rect::from_min_max(
+                    egui::pos2(cur_x, y_top),
+                    egui::pos2(cur_x + lead_w, y_bottom),
+                );
+                painter.rect_filled(scrap_rect, 0.0, egui::Color32::from_rgb(255, 235, 235));
+                painter.text(
+                    scrap_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "✂ Pre-trim Scrap (24.5 mm)",
+                    egui::FontId::proportional(11.0),
+                    egui::Color32::from_rgb(190, 40, 40),
+                );
+                draw_dimension(
+                    painter,
+                    cur_x,
+                    cur_x + lead_w,
+                    ruler_y,
+                    &format!("{:.1} mm (Scrap Snippet)", lead_mm),
+                    egui::Color32::from_rgb(210, 40, 40),
+                );
+                cur_x += lead_w;
+
+                // Pretrim cut marker
+                draw_cut_marker(
+                    painter,
+                    cur_x,
+                    y_top,
+                    y_bottom,
+                    "✂ PRE-TRIM CUT (Scrap cut)",
+                    true,
+                );
+
+                let finished_label_start = cur_x;
+
+                // 2. Finished label copies
+                for copy_idx in 0..copies {
+                    // Leading safe margin
+                    cur_x += margin_w;
+
+                    let copy_start_x = cur_x;
+                    let copy_rect = egui::Rect::from_min_size(
+                        egui::pos2(copy_start_x, printable_top),
+                        egui::vec2(single_content_w, printable_h),
+                    );
+                    painter.image(
+                        texture.id(),
+                        copy_rect,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        egui::Color32::WHITE,
+                    );
+                    cur_x += single_content_w;
+
+                    // Trailing safe margin
+                    cur_x += margin_w;
+
+                    if copies > 1 && copy_idx + 1 < copies {
+                        draw_no_cut_marker(painter, cur_x, y_top, y_bottom, "⛓ Chained (0 mm)");
                     }
+                }
 
+                // Dimension of the finished label
+                let finished_label_mm =
+                    (single_content_mm * copies as f32) + (margin_mm * 2.0 * copies as f32);
+                draw_dimension(
+                    painter,
+                    finished_label_start,
+                    cur_x,
+                    ruler_y,
+                    &format!("{:.1} mm (Finished Label)", finished_label_mm),
+                    egui::Color32::from_rgb(40, 120, 220),
+                );
+
+                // Final cut marker
+                draw_cut_marker(painter, cur_x, y_top, y_bottom, "✂ FINAL CUT", true);
+            } else {
+                let margin_w = margin_px * zoom;
+
+                // Leading blank margin (24.5 mm hardware lead + safety)
+                let lead_rect = egui::Rect::from_min_max(
+                    egui::pos2(cur_x, y_top),
+                    egui::pos2(cur_x + margin_w, y_bottom),
+                );
+                painter.rect_filled(lead_rect, 0.0, egui::Color32::from_gray(248));
+                painter.text(
+                    lead_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    format!("{:.1} mm Blank Margin", margin_mm),
+                    egui::FontId::proportional(11.0),
+                    egui::Color32::from_gray(130),
+                );
+                draw_dimension(
+                    painter,
+                    cur_x,
+                    cur_x + margin_w,
+                    ruler_y,
+                    &format!("{:.1} mm (Margin)", margin_mm),
+                    egui::Color32::from_rgb(60, 140, 220),
+                );
+                cur_x += margin_w;
+
+                // Content copies (centered)
+                for copy_idx in 0..copies {
+                    let copy_start_x = cur_x;
+                    let copy_rect = egui::Rect::from_min_size(
+                        egui::pos2(copy_start_x, printable_top),
+                        egui::vec2(single_content_w, printable_h),
+                    );
+                    painter.image(
+                        texture.id(),
+                        copy_rect,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        egui::Color32::WHITE,
+                    );
                     draw_dimension(
                         painter,
-                        tape_rect.min.x,
-                        cur_x,
+                        copy_start_x,
+                        copy_start_x + single_content_w,
                         ruler_y,
-                        &format!(
-                            "{:.1} mm (Chain)",
-                            single_content_mm * copies as f32 + (margin_mm * 2.0 * copies as f32)
-                        ),
-                        egui::Color32::from_rgb(0, 160, 90),
+                        &format!("{:.1} mm (Content)", single_content_mm),
+                        egui::Color32::from_rgb(40, 100, 200),
                     );
+                    cur_x += single_content_w;
 
-                    draw_continuous_indicator(painter, cur_x, y_top, y_bottom);
+                    if copies > 1 && copy_idx + 1 < copies {
+                        draw_no_cut_marker(painter, cur_x, y_top, y_bottom, "⛓ Chained (0 mm)");
+                    }
                 }
+
+                // Trailing blank margin (identical matching left side)
+                let trail_rect = egui::Rect::from_min_max(
+                    egui::pos2(cur_x, y_top),
+                    egui::pos2(cur_x + margin_w, y_bottom),
+                );
+                painter.rect_filled(trail_rect, 0.0, egui::Color32::from_gray(248));
+                painter.text(
+                    trail_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    format!("{:.1} mm Blank Margin", margin_mm),
+                    egui::FontId::proportional(11.0),
+                    egui::Color32::from_gray(130),
+                );
+                draw_dimension(
+                    painter,
+                    cur_x,
+                    cur_x + margin_w,
+                    ruler_y,
+                    &format!("{:.1} mm (Margin)", margin_mm),
+                    egui::Color32::from_rgb(60, 140, 220),
+                );
+                cur_x += margin_w;
+
+                // Single Final Cut at the end
+                draw_cut_marker(painter, cur_x, y_top, y_bottom, "✂ FINAL CUT", true);
             }
 
             // Draw Tape Width Callout on the left
@@ -612,16 +691,12 @@ pub fn show_canvas(ui: &mut egui::Ui, state: &mut AppState) {
 
             // Explanatory bottom legend
             let legend_y = y_bottom + 30.0;
-            let legend_text = match state.cut_mode {
-                CutMarginMode::CenteredFull => {
-                    "💡 Centered Full: Protected with symmetrical safety margins before and after text. Exactly 1 cut at end."
-                }
-                CutMarginMode::PretrimCut => {
-                    "💡 Pretrim Cut (Small Margin): Pre-trims 24.5mm scrap snippet, then prints compact label with safe margins. Exactly 2 cuts."
-                }
-                CutMarginMode::ChainPrint => {
-                    "💡 Chain Print: Continuous printing with 0mm gap between labels. Exactly 0 cuts. Click 'Feed & Cut' to finish."
-                }
+            let legend_text = if state.cut_mode == CutMarginMode::ChainPrint {
+                "💡 Chain Print: Continuous printing with 0mm gap between labels. Exactly 0 cuts. Click 'Feed & Cut' to finish."
+            } else if is_pretrim {
+                "💡 Auto Pre-trim Active (< 24.5 mm): Margin is smaller than printhead distance (24.5 mm). Printer will pre-trim scrap snippet, then print with safe margin. 2 cuts."
+            } else {
+                "💡 Centered Full (≥ 24.5 mm): Protected with symmetrical margins using natural hardware lead. Exactly 1 cut at end (0 scrap)."
             };
             painter.text(
                 egui::pos2(center.x, legend_y),

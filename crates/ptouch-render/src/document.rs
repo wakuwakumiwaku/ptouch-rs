@@ -54,8 +54,28 @@ pub struct LabelDocument {
     /// after all elements are composed, independently of per-element flips.
     #[serde(default)]
     pub flip_v: bool,
+    /// Optional front/back margin in millimeters.
+    /// - If `None` or >= 24.5 mm: Centered full margin using hardware leader (~24.5-27mm), no pre-trim scrap.
+    /// - If `< 24.5 mm`: Compact margin (e.g. 3.0mm); automatically triggers pre-trimming the leader scrap.
+    #[serde(default)]
+    pub margin_mm: Option<f32>,
     /// Elements in composition order (left to right).
     pub elements: Vec<LabelElement>,
+}
+
+impl LabelDocument {
+    /// Returns true if this label requires pre-trimming the 24.5mm hardware leader scrap.
+    pub fn is_pretrim(&self) -> bool {
+        match self.margin_mm {
+            Some(m) => m < 24.5,
+            None => false,
+        }
+    }
+
+    /// Effective margin in millimeters.
+    pub fn effective_margin_mm(&self) -> f32 {
+        self.margin_mm.unwrap_or(27.0)
+    }
 }
 
 fn default_batch_copies() -> u32 {
@@ -833,6 +853,7 @@ mod tests {
             font_margin: 2,
             flip_h: false,
             flip_v: false,
+            margin_mm: None,
             elements: vec![
                 LabelElement::Text {
                     content: "Hi".into(),
@@ -894,6 +915,7 @@ mod tests {
             font_margin: 0,
             flip_h: false,
             flip_v: false,
+            margin_mm: None,
             elements: vec![LabelElement::CutMark],
         };
         let text = doc.to_toml_string().unwrap();
@@ -910,6 +932,7 @@ mod tests {
             font_margin: 0,
             flip_h: false,
             flip_v: false,
+            margin_mm: None,
             elements: vec![LabelElement::Image {
                 path: None,
                 image_data: b"not a real image".to_vec(),
@@ -941,6 +964,7 @@ mod tests {
             font_margin: 0,
             flip_h: false,
             flip_v: false,
+            margin_mm: None,
             elements: vec![LabelElement::Text {
                 content: content.into(),
                 font_size: Some(24.0),
@@ -1059,5 +1083,24 @@ mod tests {
         assert_eq!(parsed.labels.len(), 1);
         assert_eq!(parsed.labels[0].copies, 1);
         assert_eq!(text_of(&parsed.labels[0].document), "Single Label");
+    }
+
+    #[test]
+    fn test_margin_mm_and_pretrim_detection() {
+        let mut doc = text_doc("Compact");
+        assert!(!doc.is_pretrim());
+        assert_eq!(doc.effective_margin_mm(), 27.0);
+
+        doc.margin_mm = Some(3.0);
+        assert!(doc.is_pretrim());
+        assert_eq!(doc.effective_margin_mm(), 3.0);
+
+        doc.margin_mm = Some(25.0);
+        assert!(!doc.is_pretrim());
+        assert_eq!(doc.effective_margin_mm(), 25.0);
+
+        let toml_str = doc.to_toml_string().unwrap();
+        let parsed = LabelDocument::from_toml_str(&toml_str).unwrap();
+        assert_eq!(parsed.margin_mm, Some(25.0));
     }
 }

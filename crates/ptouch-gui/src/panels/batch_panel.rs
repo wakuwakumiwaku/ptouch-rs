@@ -28,18 +28,34 @@ pub fn show_batch_panel(
 
     // Estimate total tape length for the entire batch
     let mut total_batch_mm = 0.0f32;
+    let mut total_scrap_mm = 0.0f32;
+    let mut pretrim_count = 0;
+    let mut centered_count = 0;
+
     for item in &state.batch_items {
         if item.copies > 0 {
+            let is_pre = item.document.is_pretrim();
+            let margin = item.document.effective_margin_mm();
             let label_len_mm = if let Some(ref bmp) = item.preview_bitmap {
                 let raw_mm = bmp.width() as f32 / px_per_mm;
-                match state.cut_mode {
-                    crate::state::CutMarginMode::CenteredFull => raw_mm + 27.0 * 2.0,
-                    crate::state::CutMarginMode::PretrimCut => raw_mm + state.small_margin_mm * 2.0,
-                    crate::state::CutMarginMode::ChainPrint => raw_mm + 4.0,
+                if state.cut_mode == crate::state::CutMarginMode::ChainPrint {
+                    raw_mm + 4.0
+                } else if is_pre {
+                    raw_mm + margin * 2.0 + 24.5
+                } else {
+                    raw_mm + margin * 2.0
                 }
             } else {
                 30.0
             };
+            if state.cut_mode != crate::state::CutMarginMode::ChainPrint {
+                if is_pre {
+                    pretrim_count += item.copies;
+                    total_scrap_mm += 24.5 * item.copies as f32;
+                } else {
+                    centered_count += item.copies;
+                }
+            }
             total_batch_mm += label_len_mm * item.copies as f32;
         }
     }
@@ -160,9 +176,20 @@ pub fn show_batch_panel(
                     } else {
                         "⛓ Continuous strip"
                     };
+
+                    let trim_summary = if state.cut_mode == crate::state::CutMarginMode::ChainPrint {
+                        String::new()
+                    } else if pretrim_count > 0 && centered_count > 0 {
+                        format!(" • Mixed: {centered_count} centered, {pretrim_count} pre-trimmed ({total_scrap_mm:.1}mm scrap)")
+                    } else if pretrim_count > 0 {
+                        format!(" • All {pretrim_count} pre-trimmed ({total_scrap_mm:.1}mm scrap)")
+                    } else {
+                        " • All centered (0mm scrap)".to_string()
+                    };
+
                     ui.label(
                         egui::RichText::new(format!(
-                            "{total_labels} label(s) • {total_prints} print(s) • ~{:.1} cm • {cut_tag}",
+                            "{total_labels} label(s) • {total_prints} print(s) • ~{:.1} cm • {cut_tag}{trim_summary}",
                             total_batch_mm / 10.0
                         ))
                         .strong()
@@ -210,6 +237,7 @@ pub fn show_batch_panel(
             let mut to_remove = None;
             let mut to_edit = None;
             let mut active_text_changed = false;
+            let mut active_margin_changed = false;
             let active_idx = state.active_batch_index;
             let default_tape_px = state.tape_width_px;
 
@@ -401,6 +429,57 @@ pub fn show_batch_panel(
                                     .size(10.5)
                                     .color(egui::Color32::from_rgb(110, 115, 125)),
                                 );
+
+                                ui.add_space(4.0);
+                                ui.horizontal(|ui| {
+                                    let is_pretrim = item.document.is_pretrim();
+                                    let cur_margin = item.document.effective_margin_mm();
+
+                                    if is_pretrim {
+                                        ui.label(
+                                            egui::RichText::new(format!("✂ Auto Pre-trim ({:.1} mm • 24.5 mm scrap)", cur_margin))
+                                                .small()
+                                                .strong()
+                                                .color(egui::Color32::from_rgb(194, 65, 12)),
+                                        ).on_hover_text("Margin < 24.5 mm. Printer will pre-trim the 24.5 mm scrap snippet.");
+                                    } else {
+                                        ui.label(
+                                            egui::RichText::new(format!("📏 Centered Lead ({:.1} mm • 0 mm scrap)", cur_margin))
+                                                .small()
+                                                .strong()
+                                                .color(egui::Color32::from_rgb(22, 101, 52)),
+                                        ).on_hover_text("Margin ≥ 24.5 mm. Uses printer's natural hardware lead. Zero scrap snippet!");
+                                    }
+
+                                    ui.separator();
+
+                                    let is_cent = item.document.margin_mm.is_none() || item.document.margin_mm == Some(27.0);
+                                    if ui.selectable_label(is_cent, "Centered").clicked() {
+                                        item.document.margin_mm = None;
+                                        item.dirty = true;
+                                        if is_active {
+                                            active_margin_changed = true;
+                                        }
+                                    }
+
+                                    let is_3 = item.document.margin_mm == Some(3.0);
+                                    if ui.selectable_label(is_3, "✂ 3mm").clicked() {
+                                        item.document.margin_mm = Some(3.0);
+                                        item.dirty = true;
+                                        if is_active {
+                                            active_margin_changed = true;
+                                        }
+                                    }
+
+                                    let is_5 = item.document.margin_mm == Some(5.0);
+                                    if ui.selectable_label(is_5, "✂ 5mm").clicked() {
+                                        item.document.margin_mm = Some(5.0);
+                                        item.dirty = true;
+                                        if is_active {
+                                            active_margin_changed = true;
+                                        }
+                                    }
+                                });
                             });
 
                             ui.add_space(20.0);
@@ -503,6 +582,11 @@ pub fn show_batch_panel(
                 state.elements =
                     state.batch_items[state.active_batch_index].document.elements.clone();
                 state.validate_selection();
+                state.mark_dirty();
+            }
+            if active_margin_changed && state.active_batch_index < state.batch_items.len() {
+                state.margin_mm =
+                    state.batch_items[state.active_batch_index].document.margin_mm;
                 state.mark_dirty();
             }
             if let Some(idx) = to_duplicate {

@@ -275,6 +275,7 @@ fn execute_generation(state: &mut AppState, generator: &BatchGeneratorState) {
             font_margin: state.font_margin,
             flip_h: false,
             flip_v: false,
+            margin_mm: state.margin_mm,
             elements: vec![LabelElement::Text {
                 content: text.clone(),
                 font_size: None,

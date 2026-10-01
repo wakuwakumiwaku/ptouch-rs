@@ -150,14 +150,31 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
 
             let blank_line = vec![0u8; (state.printer_max_px as usize).div_ceil(8)];
 
-            let (raster_lines, chain_print, precut) = match state.cut_mode {
-                crate::state::CutMarginMode::CenteredFull => {
-                    let prelabel_mm: f32 = 2.5;
-                    let lead_mm: f32 = 24.5;
-                    let total_margin_mm: f32 = lead_mm + prelabel_mm; // 27.0 mm
+            let is_pretrim = state.margin_mm.map(|m| m < 24.5).unwrap_or(false);
+            let margin_mm = state.margin_mm.unwrap_or(27.0);
 
-                    let leading_lines = (prelabel_mm * px_per_mm).round() as usize;
-                    let trailing_lines = (total_margin_mm * px_per_mm).round() as usize;
+            let (raster_lines, chain_print, precut) =
+                if state.cut_mode == crate::state::CutMarginMode::ChainPrint {
+                    let margin_lines = (2.0 * px_per_mm).round() as usize;
+                    let mut lines = Vec::with_capacity(margin_lines * 2 + raw_lines.len());
+                    lines.extend(std::iter::repeat_n(blank_line.clone(), margin_lines));
+                    lines.extend(raw_lines);
+                    lines.extend(std::iter::repeat_n(blank_line, margin_lines));
+                    (lines, true, false)
+                } else if is_pretrim {
+                    // Auto pre-trim: tight margin (e.g. 3mm or 5mm), pre-trims 24.5mm leader scrap snippet
+                    let margin_lines = (margin_mm * px_per_mm).round() as usize;
+                    let mut lines = Vec::with_capacity(margin_lines * 2 + raw_lines.len());
+                    lines.extend(std::iter::repeat_n(blank_line.clone(), margin_lines));
+                    lines.extend(raw_lines);
+                    lines.extend(std::iter::repeat_n(blank_line, margin_lines));
+                    (lines, false, true)
+                } else {
+                    // Centered / standard: uses natural 24.5mm hardware lead, 0 scrap snippet
+                    let lead_mm: f32 = 24.5;
+                    let leading_extra_mm = (margin_mm - lead_mm).max(0.0);
+                    let leading_lines = (leading_extra_mm * px_per_mm).round() as usize;
+                    let trailing_lines = (margin_mm * px_per_mm).round() as usize;
 
                     let mut lines =
                         Vec::with_capacity(leading_lines + raw_lines.len() + trailing_lines);
@@ -165,31 +182,13 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState) {
                     lines.extend(raw_lines);
                     lines.extend(std::iter::repeat_n(blank_line, trailing_lines));
                     (lines, false, false)
-                }
-                crate::state::CutMarginMode::PretrimCut => {
-                    let margin_lines = (state.small_margin_mm * px_per_mm).round() as usize;
-                    let mut lines = Vec::with_capacity(margin_lines * 2 + raw_lines.len());
-                    lines.extend(std::iter::repeat_n(blank_line.clone(), margin_lines));
-                    lines.extend(raw_lines);
-                    lines.extend(std::iter::repeat_n(blank_line, margin_lines));
-                    (lines, false, true)
-                }
-                crate::state::CutMarginMode::ChainPrint => {
-                    let margin_lines = (2.0 * px_per_mm).round() as usize;
-                    let mut lines = Vec::with_capacity(margin_lines * 2 + raw_lines.len());
-                    lines.extend(std::iter::repeat_n(blank_line.clone(), margin_lines));
-                    lines.extend(raw_lines);
-                    lines.extend(std::iter::repeat_n(blank_line, margin_lines));
-                    (lines, true, false)
-                }
-            };
+                };
 
             // Track cumulative tape consumption
-            let total_job_mm = match state.cut_mode {
-                crate::state::CutMarginMode::CenteredFull => {
-                    (24.5 + (raster_lines.len() as f32 / px_per_mm)) * copies as f32
-                }
-                _ => (raster_lines.len() as f32 / px_per_mm) * copies as f32,
+            let total_job_mm = if state.cut_mode == crate::state::CutMarginMode::ChainPrint {
+                (raster_lines.len() as f32 / px_per_mm) * copies as f32
+            } else {
+                (24.5 + (raster_lines.len() as f32 / px_per_mm)) * copies as f32
             };
             state.tape_printed_meters += total_job_mm / 1000.0;
 
@@ -331,7 +330,7 @@ pub fn do_batch_print(state: &mut AppState) {
     let px_per_mm = dpi / 25.4;
     let blank_line = vec![0u8; (state.printer_max_px as usize).div_ceil(8)];
 
-    let mut all_labels_raster: Vec<Vec<Vec<u8>>> = Vec::new();
+    let mut all_labels_raster: Vec<(Vec<Vec<u8>>, bool)> = Vec::new();
     let mut total_mm = 0.0f32;
 
     let mut renderer = ptouch_render::text::TextRenderer::new();
@@ -356,42 +355,45 @@ pub fn do_batch_print(state: &mut AppState) {
 
         let raw_lines = raster::bitmap_to_raster_lines(&bitmap, state.printer_max_px);
 
-        let lines = match state.cut_mode {
-            crate::state::CutMarginMode::CenteredFull => {
-                let prelabel_mm: f32 = 2.5;
-                let lead_mm: f32 = 24.5;
-                let total_margin_mm: f32 = lead_mm + prelabel_mm; // 27.0 mm
+        let is_pretrim = item.document.is_pretrim();
+        let margin_mm = item.document.effective_margin_mm();
 
-                let leading_lines = (prelabel_mm * px_per_mm).round() as usize;
-                let trailing_lines = (total_margin_mm * px_per_mm).round() as usize;
+        let (lines, precut) = if state.cut_mode == crate::state::CutMarginMode::ChainPrint {
+            let margin_lines = (2.0 * px_per_mm).round() as usize;
+            let mut l = Vec::with_capacity(margin_lines * 2 + raw_lines.len());
+            l.extend(std::iter::repeat_n(blank_line.clone(), margin_lines));
+            l.extend(raw_lines);
+            l.extend(std::iter::repeat_n(blank_line.clone(), margin_lines));
+            (l, false)
+        } else if is_pretrim {
+            // Auto pre-trim: feed and snip 24.5 mm scrap, print with custom compact margin
+            let margin_lines = (margin_mm * px_per_mm).round() as usize;
+            let mut l = Vec::with_capacity(margin_lines * 2 + raw_lines.len());
+            l.extend(std::iter::repeat_n(blank_line.clone(), margin_lines));
+            l.extend(raw_lines);
+            l.extend(std::iter::repeat_n(blank_line.clone(), margin_lines));
+            (l, true)
+        } else {
+            // Centered: uses printer's natural 24.5 mm hardware lead, 0 scrap snippet
+            let lead_mm: f32 = 24.5;
+            let leading_extra_mm = (margin_mm - lead_mm).max(0.0);
+            let leading_lines = (leading_extra_mm * px_per_mm).round() as usize;
+            let trailing_lines = (margin_mm * px_per_mm).round() as usize;
 
-                let mut l = Vec::with_capacity(leading_lines + raw_lines.len() + trailing_lines);
-                l.extend(std::iter::repeat_n(blank_line.clone(), leading_lines));
-                l.extend(raw_lines);
-                l.extend(std::iter::repeat_n(blank_line.clone(), trailing_lines));
-                l
-            }
-            crate::state::CutMarginMode::PretrimCut => {
-                let margin_lines = (state.small_margin_mm * px_per_mm).round() as usize;
-                let mut l = Vec::with_capacity(margin_lines * 2 + raw_lines.len());
-                l.extend(std::iter::repeat_n(blank_line.clone(), margin_lines));
-                l.extend(raw_lines);
-                l.extend(std::iter::repeat_n(blank_line.clone(), margin_lines));
-                l
-            }
-            crate::state::CutMarginMode::ChainPrint => {
-                let margin_lines = (2.0 * px_per_mm).round() as usize;
-                let mut l = Vec::with_capacity(margin_lines * 2 + raw_lines.len());
-                l.extend(std::iter::repeat_n(blank_line.clone(), margin_lines));
-                l.extend(raw_lines);
-                l.extend(std::iter::repeat_n(blank_line.clone(), margin_lines));
-                l
-            }
+            let mut l = Vec::with_capacity(leading_lines + raw_lines.len() + trailing_lines);
+            l.extend(std::iter::repeat_n(blank_line.clone(), leading_lines));
+            l.extend(raw_lines);
+            l.extend(std::iter::repeat_n(blank_line.clone(), trailing_lines));
+            (l, false)
         };
 
-        let label_mm = (lines.len() as f32) / px_per_mm;
+        let label_mm = if state.cut_mode == crate::state::CutMarginMode::ChainPrint {
+            lines.len() as f32 / px_per_mm
+        } else {
+            24.5 + (lines.len() as f32 / px_per_mm)
+        };
         for _ in 0..item.copies {
-            all_labels_raster.push(lines.clone());
+            all_labels_raster.push((lines.clone(), precut));
             total_mm += label_mm;
         }
     }
@@ -403,13 +405,11 @@ pub fn do_batch_print(state: &mut AppState) {
 
     state.tape_printed_meters += total_mm / 1000.0;
 
-    let precut_each = matches!(state.cut_mode, crate::state::CutMarginMode::PretrimCut);
     let cut_each = state.auto_cut && state.cut_mode != crate::state::CutMarginMode::ChainPrint;
 
     if let Some(ref tx) = state.printer_cmd_tx {
         let _ = tx.send(PrinterCommand::PrintBatch {
             labels: all_labels_raster,
-            precut_each,
             cut_each,
             quality: state.print_quality,
             target: state.printer_target.clone(),
@@ -434,6 +434,7 @@ fn do_save_layout(state: &mut AppState) {
         font_margin: state.font_margin,
         flip_h: state.overall_flip_h,
         flip_v: state.overall_flip_v,
+        margin_mm: state.margin_mm,
         elements: state.elements.clone(),
     };
 
@@ -555,6 +556,7 @@ mod tests {
             font_margin: 0,
             flip_h: false,
             flip_v: false,
+            margin_mm: None,
             elements: vec![LabelElement::CutMark],
         };
         LabelDocument::from_toml_str(&document.to_toml_string().unwrap()).unwrap()

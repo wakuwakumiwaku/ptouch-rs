@@ -94,10 +94,9 @@ pub enum PrinterCommand {
         quality: PrintQuality,
         target: PrinterTarget,
     },
-    /// Print multiple labels in a batch.
+    /// Print multiple labels in a batch. Each label carries its raster lines and precut flag.
     PrintBatch {
-        labels: Vec<Vec<Vec<u8>>>,
-        precut_each: bool,
+        labels: Vec<(Vec<Vec<u8>>, bool)>,
         cut_each: bool,
         quality: PrintQuality,
         target: PrinterTarget,
@@ -192,8 +191,6 @@ pub struct AppState {
     pub tape_printed_meters: f32,
     /// Auto-cut after printing. When false, chain print mode (no cut).
     pub auto_cut: bool,
-    /// Trim ~25mm hardware leader scrap before printing. Default false.
-    pub precut: bool,
     /// Number of copies to print. Chained automatically to eliminate waste.
     pub copies: u32,
     /// Whether a printer is currently connected (detected by background poll).
@@ -232,6 +229,10 @@ pub struct AppState {
     pub cancel_flag: Arc<AtomicBool>,
     /// Flag requesting keyboard focus on the primary text edit field.
     pub request_text_focus: bool,
+    /// Margin in millimeters for the currently active label being edited.
+    /// None => Centered Full (~27mm symmetrical margin, 0mm scrap).
+    /// Some(mm) => Custom margin. If < 24.5mm, automatically triggers pre-trimming the leader scrap!
+    pub margin_mm: Option<f32>,
 }
 
 impl Default for AppState {
@@ -263,7 +264,6 @@ impl Default for AppState {
             cartridge_length_input: String::new(),
             tape_printed_meters: 0.0,
             auto_cut: true,
-            precut: false,
             copies: 1,
             printer_connected: false,
             printer_target: PrinterTarget::Usb,
@@ -282,6 +282,7 @@ impl Default for AppState {
             show_generator_modal: false,
             cancel_flag: Arc::new(AtomicBool::new(false)),
             request_text_focus: false,
+            margin_mm: None,
         }
     }
 }
@@ -335,14 +336,14 @@ impl AppState {
     /// Ensure `batch_items` has at least one item initialized.
     pub fn ensure_batch_initialized(&mut self) {
         if self.batch_items.is_empty() {
-            let test_items = [
-                ("Ä Ö Ü ä ö ü ß • € 24,50", 2, "DINish"),
-                ("ACHTUNG!\nHochspannung 230V", 1, "Frutiger"),
-                ("SKIP ME (0 COPIES)", 0, "Inter"),
-                ("é è ê ç ñ ¿ ¡ ™ ® ©", 1, "Inter"),
+            let test_items: [(&str, u32, &str, Option<f32>); 4] = [
+                ("Ä Ö Ü ä ö ü ß • € 24,50", 2, "DINish", None),
+                ("ACHTUNG!\nHochspannung 230V", 1, "Frutiger", Some(3.0)),
+                ("SKIP ME (0 COPIES)", 0, "Inter", None),
+                ("é è ê ç ñ ¿ ¡ ™ ® ©", 1, "Inter", Some(5.0)),
             ];
 
-            for (text, copies, font) in test_items {
+            for (text, copies, font, margin) in test_items {
                 let doc = ptouch_render::document::LabelDocument {
                     version: ptouch_render::document::DOCUMENT_VERSION,
                     tape_width_mm: self.tape_width_mm,
@@ -351,6 +352,7 @@ impl AppState {
                     font_margin: 0,
                     flip_h: false,
                     flip_v: false,
+                    margin_mm: margin,
                     elements: vec![LabelElement::Text {
                         content: text.to_string(),
                         font_size: None,
@@ -377,6 +379,7 @@ impl AppState {
             self.elements = self.batch_items[0].document.elements.clone();
             self.font_name = self.batch_items[0].document.font_name.clone();
             self.copies = self.batch_items[0].copies.max(1);
+            self.margin_mm = self.batch_items[0].document.margin_mm;
             self.selected_element = Some(0);
             self.mark_dirty();
         }
@@ -421,6 +424,7 @@ impl AppState {
         self.font_margin = doc.font_margin;
         self.overall_flip_h = doc.flip_h;
         self.overall_flip_v = doc.flip_v;
+        self.margin_mm = doc.margin_mm;
         self.elements = doc.elements;
         self.selected_element = if self.elements.is_empty() {
             None
@@ -442,6 +446,7 @@ impl AppState {
             font_margin: self.font_margin,
             flip_h: false,
             flip_v: false,
+            margin_mm: self.margin_mm,
             elements: vec![LabelElement::Text {
                 content: format!("Label {}", new_num),
                 font_size: None,
@@ -523,6 +528,7 @@ impl AppState {
             font_margin: self.font_margin,
             flip_h: self.overall_flip_h,
             flip_v: self.overall_flip_v,
+            margin_mm: self.margin_mm,
             elements: self.elements.clone(),
         }
     }

@@ -62,7 +62,6 @@ pub fn printer_worker(
             }
             Ok(PrinterCommand::PrintBatch {
                 labels,
-                precut_each,
                 cut_each,
                 quality,
                 target,
@@ -74,7 +73,6 @@ pub fn printer_worker(
                     &ctx,
                     &cancel_flag,
                     labels,
-                    precut_each,
                     cut_each,
                     quality,
                 );
@@ -264,28 +262,20 @@ fn do_print_batch(
     tx: &mpsc::Sender<PrinterEvent>,
     ctx: &egui::Context,
     cancel_flag: &Arc<AtomicBool>,
-    labels: Vec<Vec<Vec<u8>>>,
-    precut_each: bool,
+    labels: Vec<(Vec<Vec<u8>>, bool)>,
     cut_each: bool,
     quality: PrintQuality,
 ) {
     cancel_flag.store(false, Ordering::SeqCst);
     let result = match target {
-        PrinterTarget::Usb => print_usb_batch(
-            &labels,
-            precut_each,
-            cut_each,
-            quality,
-            tx,
-            target,
-            ctx,
-            cancel_flag,
-        ),
+        PrinterTarget::Usb => {
+            print_usb_batch(&labels, cut_each, quality, tx, target, ctx, cancel_flag)
+        }
         #[cfg(any(target_os = "macos", test))]
         PrinterTarget::Bluetooth { address, .. } => {
             let total = labels.len();
             let mut err = None;
-            for (i, lines) in labels.iter().enumerate() {
+            for (i, (lines, _precut)) in labels.iter().enumerate() {
                 if cancel_flag.load(Ordering::SeqCst) {
                     err = Some("Batch print cancelled by user".to_string());
                     break;
@@ -318,8 +308,7 @@ fn do_print_batch(
 
 #[allow(clippy::too_many_arguments)]
 fn print_usb_batch(
-    labels: &[Vec<Vec<u8>>],
-    precut_each: bool,
+    labels: &[(Vec<Vec<u8>>, bool)],
     cut_each: bool,
     quality: PrintQuality,
     tx: &mpsc::Sender<PrinterEvent>,
@@ -333,7 +322,7 @@ fn print_usb_batch(
     let mut dev = PtouchDevice::open_first().map_err(|e| format!("Connect error: {e}"))?;
     dev.init().map_err(|e| format!("Init error: {e}"))?;
     let total = labels.len();
-    for (i, label_lines) in labels.iter().enumerate() {
+    for (i, (label_lines, item_precut)) in labels.iter().enumerate() {
         if cancel_flag.load(Ordering::SeqCst) {
             let _ = dev.close();
             return Err("Batch print cancelled by user".to_string());
@@ -351,9 +340,9 @@ fn print_usb_batch(
         let is_first = i == 0;
         let is_last = i == total - 1;
         let precut = if cut_each {
-            precut_each
+            *item_precut
         } else {
-            is_first && precut_each
+            is_first && *item_precut
         };
         let chain = if cut_each { false } else { !is_last };
         dev.print_raster(label_lines, chain, precut, quality)

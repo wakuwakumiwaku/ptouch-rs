@@ -121,98 +121,125 @@ fn show_tape_section(ui: &mut egui::Ui, state: &mut AppState) {
 
 /// Print options: cut & margin mode, copies, and quality selection.
 fn show_print_options(ui: &mut egui::Ui, state: &mut AppState) {
-    ui.heading("Cut & Margin Mode");
+    ui.heading("Margin & Trimming");
     ui.add_space(4.0);
     ui.add_enabled_ui(!state.printer_target.is_bluetooth(), |ui| {
-        let prev_mode = state.cut_mode;
+        let is_chain = state.cut_mode == CutMarginMode::ChainPrint;
 
-        ui.radio_value(
-            &mut state.cut_mode,
-            CutMarginMode::CenteredFull,
-            "Centered Full (Large Margin)",
-        )
-        .on_hover_text(
-            "Text is centered with ~24.5 mm margins on both sides.\n\
-             Cuts once at the end. Zero scrap snippets.\n\
-             Exact match for typing on the printer itself.",
-        );
-
-        ui.radio_value(
-            &mut state.cut_mode,
-            CutMarginMode::PretrimCut,
-            "Pretrim Cut (Small Margin)",
-        )
-        .on_hover_text(
-            "Pre-trims the ~25 mm leader scrap first, then prints a compact label\n\
-             with safe margins (~3 mm) and cuts at the end.\n\
-             Ideal for warning signs, tight equipment labels, and badges.",
-        );
-
-        ui.radio_value(
-            &mut state.cut_mode,
-            CutMarginMode::ChainPrint,
-            "Chain Print (Continuous)",
-        )
-        .on_hover_text(
-            "Continuous printing without automatic cuts.\n\
-             Minimal 0 mm gap between batch copies.\n\
-             Click 'Feed & Cut' in the toolbar when finished.",
-        );
-
-        if state.cut_mode != prev_mode {
-            match state.cut_mode {
-                CutMarginMode::CenteredFull => {
-                    state.auto_cut = true;
-                    state.precut = false;
-                }
-                CutMarginMode::PretrimCut => {
-                    state.auto_cut = true;
-                    state.precut = true;
-                }
-                CutMarginMode::ChainPrint => {
-                    state.auto_cut = false;
-                    state.precut = false;
-                }
+        ui.horizontal(|ui| {
+            if ui.selectable_label(!is_chain, "Standard / Auto Pre-trim").clicked() {
+                state.cut_mode = if state.margin_mm.map(|m| m < 24.5).unwrap_or(false) {
+                    CutMarginMode::PretrimCut
+                } else {
+                    CutMarginMode::CenteredFull
+                };
+                state.auto_cut = true;
+                state.mark_dirty();
             }
-            state.mark_dirty();
-        }
+            if ui.selectable_label(is_chain, "Chain Print (Continuous)").clicked() {
+                state.cut_mode = CutMarginMode::ChainPrint;
+                state.auto_cut = false;
+                state.mark_dirty();
+            }
+        });
 
-        if state.cut_mode == CutMarginMode::CenteredFull {
-            ui.add_space(2.0);
-            ui.label(
-                egui::RichText::new(
-                    "ℹ Symmetrical 27.0 mm margins on both sides (24.5 mm lead + 2.5 mm safety)",
-                )
-                .small()
-                .color(egui::Color32::from_rgb(100, 115, 130)),
-            );
-        }
+        if state.cut_mode != CutMarginMode::ChainPrint {
+            ui.add_space(4.0);
+            let is_pretrim = state.margin_mm.map(|m| m < 24.5).unwrap_or(false);
+            let cur_margin = state.margin_mm.unwrap_or(27.0);
 
-        if state.cut_mode == CutMarginMode::PretrimCut {
-            ui.add_space(2.0);
             ui.horizontal(|ui| {
-                ui.label("Safe Margin (mm):");
+                ui.label("Presets:");
+                let is_cent = state.margin_mm.is_none() || state.margin_mm == Some(27.0);
+                if ui.selectable_label(is_cent, "Centered (~27mm)").clicked() {
+                    state.margin_mm = None;
+                    state.cut_mode = CutMarginMode::CenteredFull;
+                    state.sync_active_to_batch();
+                    state.mark_dirty();
+                }
+                let is_3 = state.margin_mm == Some(3.0);
+                if ui.selectable_label(is_3, "✂ 3mm").clicked() {
+                    state.margin_mm = Some(3.0);
+                    state.cut_mode = CutMarginMode::PretrimCut;
+                    state.small_margin_mm = 3.0;
+                    state.sync_active_to_batch();
+                    state.mark_dirty();
+                }
+                let is_5 = state.margin_mm == Some(5.0);
+                if ui.selectable_label(is_5, "✂ 5mm").clicked() {
+                    state.margin_mm = Some(5.0);
+                    state.cut_mode = CutMarginMode::PretrimCut;
+                    state.small_margin_mm = 5.0;
+                    state.sync_active_to_batch();
+                    state.mark_dirty();
+                }
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Margin (mm):");
+                let mut custom_val = cur_margin;
                 if ui
                     .add(
-                        egui::DragValue::new(&mut state.small_margin_mm)
-                            .range(1.5..=20.0)
-                            .speed(0.5),
+                        egui::DragValue::new(&mut custom_val)
+                            .range(1.5..=100.0)
+                            .speed(0.5)
+                            .suffix(" mm"),
                     )
                     .changed()
                 {
+                    if (custom_val - 27.0).abs() < 0.1 {
+                        state.margin_mm = None;
+                        state.cut_mode = CutMarginMode::CenteredFull;
+                    } else {
+                        state.margin_mm = Some(custom_val);
+                        if custom_val < 24.5 {
+                            state.cut_mode = CutMarginMode::PretrimCut;
+                            state.small_margin_mm = custom_val;
+                        } else {
+                            state.cut_mode = CutMarginMode::CenteredFull;
+                        }
+                    }
+                    state.sync_active_to_batch();
                     state.mark_dirty();
                 }
-            })
-            .response
-            .on_hover_text(
-                "Safe margin added before and after text to prevent letters from being cut off.",
+            });
+
+            ui.add_space(2.0);
+            if is_pretrim {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "✂ Auto Pre-trim Active: Margin ({:.1}mm) < 24.5mm printhead lead.\nPrinter will snip 24.5mm scrap snippet.",
+                        cur_margin
+                    ))
+                    .small()
+                    .color(egui::Color32::from_rgb(194, 65, 12)),
+                );
+            } else {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "📏 Full Lead: Symmetrical {:.1}mm margin using printer's natural lead. 0mm scrap snippet.",
+                        cur_margin
+                    ))
+                    .small()
+                    .color(egui::Color32::from_rgb(22, 101, 52)),
+                );
+            }
+        } else {
+            ui.add_space(2.0);
+            ui.label(
+                egui::RichText::new("ℹ Continuous printing without cuts. Click 'Feed & Cut' in the toolbar when finished.")
+                    .small()
+                    .color(egui::Color32::from_rgb(0, 140, 70)),
             );
         }
 
-        ui.add_space(4.0);
+        ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.label("Copies:");
-            ui.add(egui::DragValue::new(&mut state.copies).range(1..=99));
+            let resp = ui.add(egui::DragValue::new(&mut state.copies).range(1..=99));
+            if resp.changed() && state.active_batch_index < state.batch_items.len() {
+                state.batch_items[state.active_batch_index].copies = state.copies;
+            }
         });
     });
 
